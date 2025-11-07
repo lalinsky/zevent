@@ -33,16 +33,6 @@ jobs:
             run: qemu
             qemu_binary: qemu-riscv64-static
 
-          - os: ubuntu-latest
-            target: x86_64-freebsd
-            run: vm
-            vm_type: freebsd
-
-          - os: ubuntu-latest
-            target: x86_64-netbsd
-            run: vm
-            vm_type: netbsd
-
           - os: macos-latest
             target: native
             run: native
@@ -85,15 +75,48 @@ jobs:
       run: ${{ matrix.qemu_binary }} ./zig-out/bin/test
       timeout-minutes: 10
 
-    - name: Run tests (FreeBSD VM)
-      if: matrix.run == 'vm' && matrix.vm_type == 'freebsd'
+  test-freebsd:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run tests in FreeBSD VM
       uses: vmactions/freebsd-vm@v1
       with:
-        run: ./zig-out/bin/test
+        release: '14.2'
+        usesh: true
+        prepare: |
+          pkg install -y curl
+        run: |
+          # Download Zig
+          curl -L https://ziglang.org/download/0.15.2/zig-freebsd-x86_64-0.15.2.tar.xz -o zig.tar.xz
+          tar xf zig.tar.xz
+          export PATH="$PWD/zig-freebsd-x86_64-0.15.2:$PATH"
 
-    - name: Run tests (NetBSD VM)
-      if: matrix.run == 'vm' && matrix.vm_type == 'netbsd'
+          # Build and test
+          zig build -Dinstall-tests
+          ./zig-out/bin/test
+
+  test-netbsd:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run tests in NetBSD VM
       uses: vmactions/netbsd-vm@v1
       with:
         release: '10.1'
-        run: ./zig-out/bin/test
+        usesh: true
+        prepare: |
+          /usr/sbin/pkg_add curl
+        run: |
+          # Download Zig
+          curl -L https://ziglang.org/download/0.15.2/zig-netbsd-x86_64-0.15.2.tar.xz -o zig.tar.xz
+          tar xf zig.tar.xz
+          export PATH="$PWD/zig-netbsd-x86_64-0.15.2:$PATH"
+
+          # Build and test
+          zig build -Dinstall-tests
+          ./zig-out/bin/test
