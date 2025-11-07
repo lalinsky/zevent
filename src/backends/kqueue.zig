@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const posix = @import("../os/posix.zig");
 const socket = @import("../os/posix/socket.zig");
 const time = @import("../time.zig");
@@ -41,17 +42,10 @@ const c = std.c;
 const EV_ERROR: u16 = 0x4000;
 const EV_EOF: u16 = 0x8000;
 
-// std.c has incorrect values for BSD kqueue constants
-// EVFILT_USER values are platform-specific:
-// - NetBSD: 8 (positive, not 1 as std.c claims)
-// - FreeBSD: -11 (negative)
-// - macOS: -10 (negative)
-// NOTE_TRIGGER: std.c has 0x08000000 (NOTE_SIGNAL), but BSD uses 0x01000000
-const EVFILT_USER: i16 = switch (@import("builtin").target.os.tag) {
+// std.c has wrong numbers for EVFILT_USER and NOTE_TRIGGER on NetBSD
+const EVFILT_USER: i16 = switch (builtin.target.os.tag) {
     .netbsd => 8,
-    .freebsd => -11,
-    .macos => -10,
-    else => @compileError("EVFILT_USER not defined for this OS"),
+    else => std.c.EVFILT.USER,
 };
 const NOTE_TRIGGER: u32 = 0x01000000;
 
