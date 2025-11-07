@@ -91,10 +91,10 @@ pub fn poll(fds: []pollfd, timeout: i32) PollError!usize {
                 }
                 const err = std.os.windows.ws2_32.WSAGetLastError();
                 switch (err) {
-                    .WSAEINTR => continue,
-                    .WSAENOBUFS => return error.SystemResources,
-                    .WSAEFAULT => unreachable,
-                    .WSAEINVAL => {
+                    .EINTR => continue,
+                    .ENOBUFS => return error.SystemResources,
+                    .EFAULT => unreachable,
+                    .EINVAL => {
                         log.err("WSAPoll returned WSAEINVAL - invalid parameter (fds.len={}, timeout={})", .{ fds.len, timeout });
                         return unexpectedWSAError(err);
                     },
@@ -165,8 +165,8 @@ pub fn shutdown(fd: fd_t, how: ShutdownHow) ShutdownError!void {
             if (rc == std.os.windows.ws2_32.SOCKET_ERROR) {
                 const err = std.os.windows.ws2_32.WSAGetLastError();
                 return switch (err) {
-                    .WSAENOTCONN => error.NotConnected,
-                    .WSAENOTSOCK => error.NotSocket,
+                    .ENOTCONN => error.NotConnected,
+                    .ENOTSOCK => error.NotSocket,
                     else => unexpectedWSAError(err),
                 };
             }
@@ -240,10 +240,10 @@ pub fn socket(domain: Domain, socket_type: Type, protocol: Protocol, flags: Open
             if (sock == std.os.windows.ws2_32.INVALID_SOCKET) {
                 const err = std.os.windows.ws2_32.WSAGetLastError();
                 return switch (err) {
-                    .WSAEAFNOSUPPORT => error.AddressFamilyNotSupported,
-                    .WSAEPROTONOSUPPORT => error.ProtocolNotSupported,
-                    .WSAEMFILE => error.ProcessFdQuotaExceeded,
-                    .WSAENOBUFS => error.SystemResources,
+                    .EAFNOSUPPORT => error.AddressFamilyNotSupported,
+                    .EPROTONOSUPPORT => error.ProtocolNotSupported,
+                    .EMFILE => error.ProcessFdQuotaExceeded,
+                    .ENOBUFS => error.SystemResources,
                     else => unexpectedWSAError(err),
                 };
             }
@@ -324,10 +324,10 @@ pub fn bind(fd: fd_t, addr: *const sockaddr, addr_len: socklen_t) BindError!void
             if (rc == std.os.windows.ws2_32.SOCKET_ERROR) {
                 const err = std.os.windows.ws2_32.WSAGetLastError();
                 return switch (err) {
-                    .WSAEADDRINUSE => error.AddressInUse,
-                    .WSAEADDRNOTAVAIL => error.AddressNotAvailable,
-                    .WSAEAFNOSUPPORT => error.AddressFamilyNotSupported,
-                    .WSAEACCES => error.PermissionDenied,
+                    .EADDRINUSE => error.AddressInUse,
+                    .EADDRNOTAVAIL => error.AddressNotAvailable,
+                    .EAFNOSUPPORT => error.AddressFamilyNotSupported,
+                    .EACCES => error.PermissionDenied,
                     else => unexpectedWSAError(err),
                 };
             }
@@ -372,8 +372,8 @@ pub fn listen(fd: fd_t, backlog: u31) ListenError!void {
             if (rc == std.os.windows.ws2_32.SOCKET_ERROR) {
                 const err = std.os.windows.ws2_32.WSAGetLastError();
                 return switch (err) {
-                    .WSAEADDRINUSE => error.AddressInUse,
-                    .WSAEOPNOTSUPP => error.OperationNotSupported,
+                    .EADDRINUSE => error.AddressInUse,
+                    .EOPNOTSUPP => error.OperationNotSupported,
                     else => unexpectedWSAError(err),
                 };
             }
@@ -417,16 +417,16 @@ pub fn connect(fd: fd_t, addr: *const sockaddr, addr_len: socklen_t) ConnectErro
             if (rc == std.os.windows.ws2_32.SOCKET_ERROR) {
                 const err = std.os.windows.ws2_32.WSAGetLastError();
                 return switch (err) {
-                    .WSAEACCES => error.AccessDenied,
-                    .WSAEADDRINUSE => error.AddressInUse,
-                    .WSAEADDRNOTAVAIL => error.AddressNotAvailable,
-                    .WSAEAFNOSUPPORT => error.AddressFamilyNotSupported,
-                    .WSAEWOULDBLOCK => error.WouldBlock,
-                    .WSAEISCONN => error.AlreadyConnected,
-                    .WSAEALREADY => error.ConnectionPending,
-                    .WSAECONNREFUSED => error.ConnectionRefused,
-                    .WSAETIMEDOUT => error.ConnectionRefused,
-                    .WSAENETUNREACH => error.NetworkUnreachable,
+                    .EACCES => error.AccessDenied,
+                    .EADDRINUSE => error.AddressInUse,
+                    .EADDRNOTAVAIL => error.AddressNotAvailable,
+                    .EAFNOSUPPORT => error.AddressFamilyNotSupported,
+                    .EWOULDBLOCK => error.WouldBlock,
+                    .EISCONN => error.AlreadyConnected,
+                    .EALREADY => error.ConnectionPending,
+                    .ECONNREFUSED => error.ConnectionRefused,
+                    .ETIMEDOUT => error.ConnectionRefused,
+                    .ENETUNREACH => error.NetworkUnreachable,
                     else => unexpectedWSAError(err),
                 };
             }
@@ -482,10 +482,10 @@ pub fn accept(fd: fd_t, addr: ?*sockaddr, addr_len: ?*socklen_t, flags: OpenFlag
             if (sock == std.os.windows.ws2_32.INVALID_SOCKET) {
                 const err = std.os.windows.ws2_32.WSAGetLastError();
                 return switch (err) {
-                    .WSAEWOULDBLOCK => error.WouldBlock,
-                    .WSAECONNABORTED => error.ConnectionAborted,
-                    .WSAEMFILE => error.ProcessFdQuotaExceeded,
-                    .WSAENOBUFS => error.SystemResources,
+                    .EWOULDBLOCK => error.WouldBlock,
+                    .ECONNABORTED => error.ConnectionAborted,
+                    .EMFILE => error.ProcessFdQuotaExceeded,
+                    .ENOBUFS => error.SystemResources,
                     else => unexpectedWSAError(err),
                 };
             }
@@ -612,14 +612,14 @@ pub fn errnoToConnectError(err: i32) ConnectError {
         .windows => {
             const wsa_err: std.os.windows.ws2_32.WinsockError = @enumFromInt(@as(u16, @intCast(err)));
             return switch (wsa_err) {
-                .WSAECONNREFUSED => error.ConnectionRefused,
-                .WSAEHOSTUNREACH, .WSAENETUNREACH => error.NetworkUnreachable,
-                .WSAEACCES => error.AccessDenied,
-                .WSAEADDRINUSE => error.AddressInUse,
-                .WSAEADDRNOTAVAIL => error.AddressNotAvailable,
-                .WSAEAFNOSUPPORT => error.AddressFamilyNotSupported,
-                .WSAEISCONN => error.AlreadyConnected,
-                .WSAEALREADY => error.ConnectionPending,
+                .ECONNREFUSED => error.ConnectionRefused,
+                .EHOSTUNREACH, .ENETUNREACH => error.NetworkUnreachable,
+                .EACCES => error.AccessDenied,
+                .EADDRINUSE => error.AddressInUse,
+                .EADDRNOTAVAIL => error.AddressNotAvailable,
+                .EAFNOSUPPORT => error.AddressFamilyNotSupported,
+                .EISCONN => error.AlreadyConnected,
+                .EALREADY => error.ConnectionPending,
                 else => unexpectedWSAError(wsa_err),
             };
         },
@@ -645,9 +645,9 @@ pub fn errnoToAcceptError(err: i32) AcceptError {
         .windows => {
             const wsa_err: std.os.windows.ws2_32.WinsockError = @enumFromInt(@as(u16, @intCast(err)));
             return switch (wsa_err) {
-                .WSAECONNABORTED => error.ConnectionAborted,
-                .WSAEACCES => error.PermissionDenied,
-                .WSAEPROTONOSUPPORT => error.ProtocolFailure,
+                .ECONNABORTED => error.ConnectionAborted,
+                .EACCES => error.PermissionDenied,
+                .EPROTONOSUPPORT => error.ProtocolFailure,
                 else => unexpectedWSAError(wsa_err),
             };
         },
@@ -668,8 +668,8 @@ pub fn errnoToRecvError(err: i32) RecvError {
         .windows => {
             const wsa_err: std.os.windows.ws2_32.WinsockError = @enumFromInt(@as(u16, @intCast(err)));
             return switch (wsa_err) {
-                .WSAECONNRESET, .WSAENETRESET => error.ConnectionResetByPeer,
-                .WSAECONNREFUSED => error.ConnectionRefused,
+                .ECONNRESET, .ENETRESET => error.ConnectionResetByPeer,
+                .ECONNREFUSED => error.ConnectionRefused,
                 else => unexpectedWSAError(wsa_err),
             };
         },
@@ -689,10 +689,10 @@ pub fn errnoToSendError(err: i32) SendError {
         .windows => {
             const wsa_err: std.os.windows.ws2_32.WinsockError = @enumFromInt(@as(u16, @intCast(err)));
             return switch (wsa_err) {
-                .WSAECONNRESET, .WSAENETRESET => error.ConnectionResetByPeer,
-                .WSAESHUTDOWN => error.BrokenPipe,
-                .WSAEACCES => error.AccessDenied,
-                .WSAEMSGSIZE => error.MessageTooBig,
+                .ECONNRESET, .ENETRESET => error.ConnectionResetByPeer,
+                .ESHUTDOWN => error.BrokenPipe,
+                .EACCES => error.AccessDenied,
+                .EMSGSIZE => error.MessageTooBig,
                 else => unexpectedWSAError(wsa_err),
             };
         },
@@ -745,9 +745,9 @@ pub fn recv(fd: fd_t, buffers: []iovec, flags: RecvFlags) RecvError!usize {
             if (rc == std.os.windows.ws2_32.SOCKET_ERROR) {
                 const err = std.os.windows.ws2_32.WSAGetLastError();
                 return switch (err) {
-                    .WSAEWOULDBLOCK => error.WouldBlock,
-                    .WSAECONNREFUSED => error.ConnectionRefused,
-                    .WSAECONNRESET => error.ConnectionResetByPeer,
+                    .EWOULDBLOCK => error.WouldBlock,
+                    .ECONNREFUSED => error.ConnectionRefused,
+                    .ECONNRESET => error.ConnectionResetByPeer,
                     else => unexpectedWSAError(err),
                 };
             }
@@ -854,10 +854,10 @@ pub fn send(fd: fd_t, buffers: []const iovec_const, flags: SendFlags) SendError!
             if (rc == std.os.windows.ws2_32.SOCKET_ERROR) {
                 const err = std.os.windows.ws2_32.WSAGetLastError();
                 return switch (err) {
-                    .WSAEWOULDBLOCK => error.WouldBlock,
-                    .WSAEACCES => error.AccessDenied,
-                    .WSAECONNRESET => error.ConnectionResetByPeer,
-                    .WSAEMSGSIZE => error.MessageTooBig,
+                    .EWOULDBLOCK => error.WouldBlock,
+                    .EACCES => error.AccessDenied,
+                    .ECONNRESET => error.ConnectionResetByPeer,
+                    .EMSGSIZE => error.MessageTooBig,
                     else => unexpectedWSAError(err),
                 };
             }
@@ -983,9 +983,9 @@ pub fn recvfrom(
             if (rc == std.os.windows.ws2_32.SOCKET_ERROR) {
                 const err = std.os.windows.ws2_32.WSAGetLastError();
                 return switch (err) {
-                    .WSAEWOULDBLOCK => error.WouldBlock,
-                    .WSAECONNREFUSED => error.ConnectionRefused,
-                    .WSAECONNRESET => error.ConnectionResetByPeer,
+                    .EWOULDBLOCK => error.WouldBlock,
+                    .ECONNREFUSED => error.ConnectionRefused,
+                    .ECONNRESET => error.ConnectionResetByPeer,
                     else => unexpectedWSAError(err),
                 };
             }
@@ -1091,10 +1091,10 @@ pub fn sendto(
             if (rc == std.os.windows.ws2_32.SOCKET_ERROR) {
                 const err = std.os.windows.ws2_32.WSAGetLastError();
                 return switch (err) {
-                    .WSAEWOULDBLOCK => error.WouldBlock,
-                    .WSAEACCES => error.AccessDenied,
-                    .WSAECONNRESET => error.ConnectionResetByPeer,
-                    .WSAEMSGSIZE => error.MessageTooBig,
+                    .EWOULDBLOCK => error.WouldBlock,
+                    .EACCES => error.AccessDenied,
+                    .ECONNRESET => error.ConnectionResetByPeer,
+                    .EMSGSIZE => error.MessageTooBig,
                     else => unexpectedWSAError(err),
                 };
             }
