@@ -11,7 +11,7 @@ fn unexpectedWSAError(err: std.os.windows.ws2_32.WinsockError) error{Unexpected}
             \\unexpected WSA error: {}
             \\please file a bug report: https://github.com/lalinsky/zio/issues/new
         , .{err});
-        std.debug.dumpCurrentStackTrace(null);
+        std.debug.dumpCurrentStackTrace(.{});
     }
     return error.Unexpected;
 }

@@ -33,7 +33,7 @@ pub fn unexpectedErrno(err: system.E) error{Unexpected} {
             \\unexpected errno: {d}
             \\please file a bug report: https://github.com/lalinsky/zio/issues/new
         , .{@intFromEnum(err)});
-        std.debug.dumpCurrentStackTrace(null);
+        std.debug.dumpCurrentStackTrace(.{});
     }
     return error.Unexpected;
 }
