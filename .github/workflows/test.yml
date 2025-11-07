@@ -11,6 +11,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+
+        zig_version:
+          - 0.15.2
+          - master
+
         include:
 
           - os: ubuntu-latest
@@ -60,7 +65,7 @@ jobs:
     - name: Setup Zig
       uses: mlugg/setup-zig@v2
       with:
-        version: 0.15.2
+        version: ${{ matrix.zig_version }}
 
     - name: Build
       run: >
