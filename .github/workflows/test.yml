@@ -89,12 +89,10 @@ jobs:
       if: matrix.run == 'vm' && matrix.vm_type == 'freebsd'
       uses: vmactions/freebsd-vm@v1
       with:
-        sync: sshfs
         run: ./zig-out/bin/test
 
     - name: Run tests (NetBSD VM)
       if: matrix.run == 'vm' && matrix.vm_type == 'netbsd'
       uses: vmactions/netbsd-vm@v1
       with:
-        sync: sshfs
         run: ./zig-out/bin/test
