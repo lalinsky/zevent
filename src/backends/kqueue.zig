@@ -110,7 +110,7 @@ fn queueRegister(self: *Self, fd: NetHandle, completion: *Completion) !void {
     try self.change_buffer.append(self.allocator, .{
         .ident = @intCast(fd),
         .filter = filter,
-        .flags = c.EV.ADD | c.EV.ENABLE | c.EV.CLEAR,
+        .flags = c.EV.ADD | c.EV.ENABLE | c.EV.ONESHOT,
         .fflags = 0,
         .data = 0,
         .udata = @intFromPtr(completion),
@@ -118,6 +118,7 @@ fn queueRegister(self: *Self, fd: NetHandle, completion: *Completion) !void {
 }
 
 /// Queue a kevent change to unregister a completion
+/// NOTE: Only used for cancellations; normal completions use EV_ONESHOT which auto-removes events
 fn queueUnregister(self: *Self, fd: NetHandle, completion: *Completion) !void {
     const filter = getFilter(completion.op);
     try self.change_buffer.append(self.allocator, .{
@@ -258,11 +259,12 @@ pub fn tick(self: *Self, state: *LoopState, timeout_ms: u64) !void {
 
         switch (checkCompletion(completion, &event)) {
             .completed => {
-                try self.queueUnregister(fd, completion);
+                // EV_ONESHOT automatically removes the event
                 state.markCompleted(completion);
             },
             .requeue => {
-                // Spurious wakeup - kevent stays registered
+                // Spurious wakeup - EV_ONESHOT already consumed the event, re-register
+                try self.queueRegister(fd, completion);
             },
         }
     }
