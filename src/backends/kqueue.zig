@@ -452,85 +452,66 @@ pub const AsyncImpl = struct {
     ident: usize,
 
     pub fn init(self: *AsyncImpl, kqueue_fd: i32) !void {
-        // Use a unique identifier for the user event
-        const ident: usize = @intFromPtr(self);
-
-        // Diagnostic logging for constant values
-        log.debug("=== KQUEUE CONSTANTS DIAGNOSTIC ===", .{});
-        log.debug("EVFILT.USER (std.c) = {d} (0x{x})", .{ @as(i16, @intCast(c.EVFILT.USER)), @as(u16, @bitCast(@as(i16, @intCast(c.EVFILT.USER)))) });
-        log.debug("EVFILT.USER (correct) = {d} (0x{x})", .{ EVFILT_USER, @as(u16, @bitCast(EVFILT_USER)) });
-        log.debug("EV.ADD = {d} (0x{x})", .{ c.EV.ADD, c.EV.ADD });
-        log.debug("EV.ENABLE = {d} (0x{x})", .{ c.EV.ENABLE, c.EV.ENABLE });
-        log.debug("EV.CLEAR = {d} (0x{x})", .{ c.EV.CLEAR, c.EV.CLEAR });
-        log.debug("EV.DELETE = {d} (0x{x})", .{ c.EV.DELETE, c.EV.DELETE });
-        log.debug("NOTE.TRIGGER (std.c) = {d} (0x{x})", .{ c.NOTE.TRIGGER, c.NOTE.TRIGGER });
-        log.debug("NOTE.TRIGGER (correct) = {d} (0x{x})", .{ NOTE_TRIGGER, NOTE_TRIGGER });
-        log.debug("sizeof(Kevent) = {d}", .{@sizeOf(c.Kevent)});
-        log.debug("Kevent.ident offset = {d}", .{@offsetOf(c.Kevent, "ident")});
-        log.debug("Kevent.filter offset = {d}", .{@offsetOf(c.Kevent, "filter")});
-        log.debug("Kevent.flags offset = {d}", .{@offsetOf(c.Kevent, "flags")});
-        log.debug("Kevent.fflags offset = {d}", .{@offsetOf(c.Kevent, "fflags")});
-        log.debug("Kevent.data offset = {d}", .{@offsetOf(c.Kevent, "data")});
-        log.debug("Kevent.udata offset = {d}", .{@offsetOf(c.Kevent, "udata")});
-        log.debug("===================================", .{});
-
-        // Register EVFILT_USER with kqueue
-        var changes: [1]c.Kevent = undefined;
-        const flags = c.EV.ADD | c.EV.ENABLE | c.EV.CLEAR;
-        changes[0] = .{
-            .ident = ident,
-            .filter = EVFILT_USER,
-            .flags = flags,
-            .fflags = 0,
-            .data = 0,
-            .udata = 0,
+        var changes: [1]c.Kevent = .{
+            .{
+                .ident = ntFromPtr(self),
+                .filter = EVFILT_USER,
+                .flags = c.EV.ADD | c.EV.ENABLE | c.EV.CLEAR,
+                .fflags = 0,
+                .data = 0,
+                .udata = 0,
+            },
         };
-        log.debug("Registering EVFILT_USER: ident={d}, filter={d}, flags={d} (0x{x})", .{ ident, EVFILT_USER, flags, flags });
         const rc = c.kevent(kqueue_fd, &changes, 1, &.{}, 0, null);
-        const err = posix.errno(rc);
-        log.debug("kevent() returned: rc={d}, errno={}", .{ rc, err });
-        switch (err) {
+        switch (posix.errno(rc)) {
             .SUCCESS => {},
-            else => |e| {
-                log.err("kevent() failed with errno {d}: {}", .{ @intFromEnum(e), e });
-                return posix.unexpectedErrno(e);
+            else => |err| {
+                log.err("Failed to add user kevent: {}", .{err});
+                return posix.unexpectedErrno(err);
             },
         }
 
         self.* = .{
             .kqueue_fd = kqueue_fd,
-            .ident = ident,
+            .ident = changes[0].ident,
         };
     }
 
     pub fn deinit(self: *AsyncImpl) void {
-        // Remove from kqueue
-        var changes: [1]c.Kevent = undefined;
-        changes[0] = .{
+        var changes: [1]c.Kevent = .{.{
             .ident = self.ident,
             .filter = EVFILT_USER,
             .flags = c.EV.DELETE,
             .fflags = 0,
             .data = 0,
             .udata = 0,
-        };
-        _ = c.kevent(self.kqueue_fd, &changes, 1, &.{}, 0, null);
+        }};
+        const rc = c.kevent(self.kqueue_fd, &changes, 1, &.{}, 0, null);
+        switch (posix.errno(rc)) {
+            .SUCCESS => {},
+            else => |err| {
+                log.err("Failed to remove user kevent: {}", .{err});
+            },
+        }
     }
 
     /// Notify the event loop (thread-safe)
     pub fn notify(self: *AsyncImpl) void {
-        var changes: [1]c.Kevent = undefined;
-        changes[0] = .{
+        var changes: [1]c.Kevent = .{.{
             .ident = self.ident,
             .filter = EVFILT_USER,
             .flags = 0,
             .fflags = NOTE_TRIGGER,
             .data = 0,
             .udata = 0,
-        };
+        }};
         const rc = c.kevent(self.kqueue_fd, &changes, 1, &.{}, 0, null);
-        if (posix.errno(rc) != .SUCCESS) {
-            log.err("Failed to trigger user event: {}", .{posix.errno(rc)});
+        switch (posix.errno(rc)) {
+            .SUCCESS => {},
+            else => |err| {
+                log.err("Failed to trigger user kevent: {}", .{err});
+                @panic("TODO: handle error");
+            },
         }
     }
 
