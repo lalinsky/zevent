@@ -41,8 +41,10 @@ const c = std.c;
 const EV_ERROR: u16 = 0x4000;
 const EV_EOF: u16 = 0x8000;
 
-// std.c has the wrong value for NOTE_TRIGGER (0x08000000 instead of 0x01000000)
-// Define the correct value for BSD systems
+// std.c has incorrect values for BSD kqueue constants
+// EVFILT_USER: std.c has 1, but BSD uses 8
+// NOTE_TRIGGER: std.c has 0x08000000 (NOTE_SIGNAL), but BSD uses 0x01000000
+const EVFILT_USER: i16 = 8;
 const NOTE_TRIGGER: u32 = 0x01000000;
 
 allocator: std.mem.Allocator,
@@ -238,7 +240,7 @@ pub fn tick(self: *Self, state: *LoopState, timeout_ms: u64) !void {
     for (events[0..n]) |event| {
         // Check if this is the async wakeup user event
         if (self.async_impl) |*impl| {
-            if (event.filter == c.EVFILT.USER and event.ident == impl.ident) {
+            if (event.filter == EVFILT_USER and event.ident == impl.ident) {
                 state.loop.processAsyncHandles();
                 impl.drain();
                 continue;
@@ -453,9 +455,8 @@ pub const AsyncImpl = struct {
 
         // Diagnostic logging for constant values
         log.debug("=== KQUEUE CONSTANTS DIAGNOSTIC ===", .{});
-        const evfilt_user_i16: i16 = @intCast(c.EVFILT.USER);
-        const evfilt_user_u16: u16 = @bitCast(evfilt_user_i16);
-        log.debug("EVFILT.USER = {d} (0x{x})", .{ evfilt_user_i16, evfilt_user_u16 });
+        log.debug("EVFILT.USER (std.c) = {d} (0x{x})", .{ @as(i16, @intCast(c.EVFILT.USER)), @as(u16, @bitCast(@as(i16, @intCast(c.EVFILT.USER)))) });
+        log.debug("EVFILT.USER (correct) = {d} (0x{x})", .{ EVFILT_USER, @as(u16, @bitCast(EVFILT_USER)) });
         log.debug("EV.ADD = {d} (0x{x})", .{ c.EV.ADD, c.EV.ADD });
         log.debug("EV.ENABLE = {d} (0x{x})", .{ c.EV.ENABLE, c.EV.ENABLE });
         log.debug("EV.CLEAR = {d} (0x{x})", .{ c.EV.CLEAR, c.EV.CLEAR });
@@ -476,13 +477,13 @@ pub const AsyncImpl = struct {
         const flags = c.EV.ADD | c.EV.ENABLE | c.EV.CLEAR;
         changes[0] = .{
             .ident = ident,
-            .filter = c.EVFILT.USER,
+            .filter = EVFILT_USER,
             .flags = flags,
             .fflags = 0,
             .data = 0,
             .udata = 0,
         };
-        log.debug("Registering EVFILT_USER: ident={d}, filter={d}, flags={d} (0x{x})", .{ ident, evfilt_user_i16, flags, flags });
+        log.debug("Registering EVFILT_USER: ident={d}, filter={d}, flags={d} (0x{x})", .{ ident, EVFILT_USER, flags, flags });
         const rc = c.kevent(kqueue_fd, &changes, 1, &.{}, 0, null);
         const err = posix.errno(rc);
         log.debug("kevent() returned: rc={d}, errno={}", .{ rc, err });
@@ -505,7 +506,7 @@ pub const AsyncImpl = struct {
         var changes: [1]c.Kevent = undefined;
         changes[0] = .{
             .ident = self.ident,
-            .filter = c.EVFILT.USER,
+            .filter = EVFILT_USER,
             .flags = c.EV.DELETE,
             .fflags = 0,
             .data = 0,
@@ -519,7 +520,7 @@ pub const AsyncImpl = struct {
         var changes: [1]c.Kevent = undefined;
         changes[0] = .{
             .ident = self.ident,
-            .filter = c.EVFILT.USER,
+            .filter = EVFILT_USER,
             .flags = 0,
             .fflags = NOTE_TRIGGER,
             .data = 0,
