@@ -176,10 +176,10 @@ pub fn main() !void {
 
                 Printer.fmt("{s}\n", .{BORDER});
                 if (@errorReturnTrace()) |trace| {
-                    if (comptime builtin.zig_version.order(.{ .major = 0, .minor = 16, .patch = 0 }) != .lt) {
-                        std.debug.dumpStackTrace(trace);
-                    } else {
+                    if (comptime builtin.zig_version.order(.{ .major = 0, .minor = 16, .patch = 0 }) == .lt) {
                         std.debug.dumpStackTrace(trace.*);
+                    } else {
+                        std.debug.dumpStackTrace(trace);
                     }
                 }
                 if (env.fail_first) {
