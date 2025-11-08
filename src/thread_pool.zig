@@ -78,7 +78,8 @@ pub const ThreadPool = struct {
         self.workers_mutex.lock();
         defer self.workers_mutex.unlock();
 
-        if (self.workers.items.len <= self.min_threads) return false;
+        const allow_removal = self.shutdown or self.workers.items.len > self.min_threads;
+        if (!allow_removal) return false;
 
         for (self.workers.items, 0..) |*w, i| {
             if (w == worker) {
