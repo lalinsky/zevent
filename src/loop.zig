@@ -211,7 +211,11 @@ pub const Loop = struct {
                     self.state.active += 1;
                     thread_pool.submit(work);
                 } else {
+                    work.loop = self;
+                    work.c.state = .running;
                     work.result = error.NoThreadPool;
+                    self.state.active += 1;
+                    work.state.store(.completed, .release);
                     self.state.markCompleted(&work.c);
                 }
                 return;
