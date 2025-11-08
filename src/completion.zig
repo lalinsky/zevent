@@ -22,6 +22,8 @@ pub const OperationType = enum {
     net_close,
 };
 
+pub const NoCompletionData = struct {};
+
 pub const Completion = struct {
     op: OperationType,
     state: State = .new,
@@ -35,6 +37,9 @@ pub const Completion = struct {
     /// Used for submission queue OR poll queue (mutually exclusive).
     prev: ?*Completion = null,
     next: ?*Completion = null,
+
+    /// Internal data for the backend.
+    internal: if (@hasDecl(Backend, "CompletionData")) Backend.CompletionData else NoCompletionData = .{},
 
     pub const State = enum { new, adding, running, completed };
 
@@ -59,7 +64,7 @@ pub const Completion = struct {
         return @fieldParentPtr("c", c);
     }
 
-    pub fn getResult(c: *Completion, comptime T: type) !@FieldType(T, "result") {
+    pub fn getResult(c: *Completion, comptime T: type) @FieldType(T, "result") {
         if (c.canceled != null) return error.Canceled;
         return c.cast(T).result;
     }
