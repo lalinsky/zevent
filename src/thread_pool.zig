@@ -19,11 +19,10 @@ pub const ThreadPool = struct {
         self.* = .{
             .allocator = allocator,
         };
+        defer self.deinit();
 
         const num_threads = options.num_threads orelse std.Thread.cpuCount();
-
         try self.threads.ensureTotalCapacity(allocator, num_threads);
-        errdefer self.threads.deinit(allocator);
 
         for (0..num_threads) |_| {
             const thread = try std.Thread.spawn(.{}, run, .{self});
