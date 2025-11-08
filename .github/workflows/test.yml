@@ -16,12 +16,7 @@ jobs:
           - os: ubuntu-latest
             run: native
             target: x86_64-linux
-            backend: epoll
-
-          - os: ubuntu-latest
-            run: native
-            target: x86_64-linux
-            backend: poll
+            backends: "epoll,poll"
 
           - os: ubuntu-latest
             target: aarch64-linux
@@ -37,40 +32,24 @@ jobs:
             target: x86_64-freebsd
             run: vm
             vm_type: freebsd
-            backend: kqueue
-
-          - os: ubuntu-latest
-            target: x86_64-freebsd
-            run: vm
-            vm_type: freebsd
-            backend: poll
+            backends: "kqueue,poll"
 
           - os: ubuntu-latest
             target: x86_64-netbsd
             run: vm
             vm_type: netbsd
-            backend: kqueue
-
-          - os: ubuntu-latest
-            target: x86_64-netbsd
-            run: vm
-            vm_type: netbsd
-            backend: epoll
+            backends: "kqueue,epoll"
 
 
           - os: macos-latest
             target: native
             run: native
-            backend: kqueue
-
-          - os: macos-latest
-            target: native
-            run: native
-            backend: poll
+            backends: "kqueue,poll"
 
           - os: windows-latest
             target: native
             run: native
+            backends: "poll"
 
     runs-on: ${{ matrix.os }}
 
@@ -84,15 +63,35 @@ jobs:
         version: 0.15.2
 
     - name: Build
-      run: >
-        zig build -Dinstall-tests
-        ${{ matrix.backend && format('-Dbackend={0}', matrix.backend) || '' }}
-        ${{ matrix.target != 'native' && format('-Dtarget={0}', matrix.target) || '' }}
+      shell: bash
+      run: |
+        TARGET_FLAG="${{ matrix.target != 'native' && format('-Dtarget={0}', matrix.target) || '' }}"
+        IFS=',' read -ra BACKENDS <<< "${{ matrix.backends || 'default' }}"
+        for backend in "${BACKENDS[@]}"; do
+          echo "Building with backend: $backend"
+          if [ "$backend" = "default" ]; then
+            zig build -Dinstall-tests $TARGET_FLAG
+          else
+            zig build -Dinstall-tests -Dbackend=$backend $TARGET_FLAG
+            cp zig-out/bin/test zig-out/bin/test-$backend
+          fi
+        done
       timeout-minutes: 5
 
     - name: Run tests (native)
       if: matrix.run == 'native'
-      run: ./zig-out/bin/test
+      shell: bash
+      run: |
+        IFS=',' read -ra BACKENDS <<< "${{ matrix.backends || 'default' }}"
+        for backend in "${BACKENDS[@]}"; do
+          if [ "$backend" = "default" ]; then
+            echo "Running tests with default backend"
+            ./zig-out/bin/test
+          else
+            echo "Running tests with backend: $backend"
+            ./zig-out/bin/test-$backend
+          fi
+        done
       timeout-minutes: 5
 
     - name: Install QEMU
@@ -110,11 +109,29 @@ jobs:
       if: matrix.run == 'vm' && matrix.vm_type == 'freebsd'
       uses: vmactions/freebsd-vm@v1
       with:
-        run: ./zig-out/bin/test
+        run: |
+          for backend in $(echo "${{ matrix.backends || 'default' }}" | tr ',' ' '); do
+            if [ "$backend" = "default" ]; then
+              echo "Running tests with default backend"
+              ./zig-out/bin/test
+            else
+              echo "Running tests with backend: $backend"
+              ./zig-out/bin/test-$backend
+            fi
+          done
 
     - name: Run tests (NetBSD VM)
       if: matrix.run == 'vm' && matrix.vm_type == 'netbsd'
       uses: vmactions/netbsd-vm@v1
       with:
         release: '10.1'
-        run: ./zig-out/bin/test
+        run: |
+          for backend in $(echo "${{ matrix.backends || 'default' }}" | tr ',' ' '); do
+            if [ "$backend" = "default" ]; then
+              echo "Running tests with default backend"
+              ./zig-out/bin/test
+            else
+              echo "Running tests with backend: $backend"
+              ./zig-out/bin/test-$backend
+            fi
+          done
