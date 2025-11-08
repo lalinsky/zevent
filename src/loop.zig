@@ -190,8 +190,6 @@ pub const Loop = struct {
     pub fn add(self: *Loop, completion: *Completion) void {
         std.debug.assert(completion.state == .new);
 
-        std.log.debug("Adding {} to loop", .{completion.op});
-
         if (completion.canceled) |cancel| {
             // Directly mark it as canceled
             cancel.result = {};
@@ -250,7 +248,7 @@ pub const Loop = struct {
 
                     if (cancel.cancel_c.state == .new) {
                         // Completion hasn't been added yet - just mark it as canceled
-                        // When it gets added, the check at line 195-201 will catch it
+                        // When it gets added, the early-exit check at the start of add() will catch it
                         // and complete both the target and this cancel operation
                         self.state.active += 1;
                         return;
@@ -258,7 +256,7 @@ pub const Loop = struct {
 
                     if (cancel.cancel_c.state == .adding) {
                         // Completion is in the submissions queue being processed
-                        // The backend will catch it in processSubmissions (epoll.zig:222-225)
+                        // The backend will catch it in processSubmissions via the canceled field check
                         // and complete both the target and this cancel operation
                         self.state.active += 1;
                         return;

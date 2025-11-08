@@ -245,12 +245,7 @@ pub fn tick(self: *Self, state: *LoopState, timeout_ms: u64) !void {
 pub fn startCompletion(self: *Self, comp: *Completion) !enum { completed, running } {
     switch (comp.op) {
         .timer, .async, .work => unreachable, // Manged by the loop
-
-        .cancel => {
-            const data = comp.cast(Cancel);
-            data.cancel_c.canceled = comp;
-            return .running; // Cancel waits until target is actually cancelled
-        },
+        .cancel => return .running, // Cancel was marked by loop and waits until the target completes
 
         // Synchronous operations - complete immediately
         .net_open => {
