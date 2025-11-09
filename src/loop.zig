@@ -15,7 +15,7 @@ const FileWrite = @import("completion.zig").FileWrite;
 const ThreadPool = @import("thread_pool.zig").ThreadPool;
 const time = @import("os/time.zig");
 const net = @import("os/net.zig");
-const file_ops = @import("file_ops.zig");
+const common = @import("backends/common.zig");
 
 pub const RunMode = enum {
     no_wait,
@@ -399,28 +399,28 @@ pub const Loop = struct {
             .file_open => {
                 const file_open = completion.cast(FileOpen);
                 file_open.internal.allocator = self.allocator;
-                file_open.internal.work = Work.init(file_ops.fileOpenWork, null);
+                file_open.internal.work = Work.init(common.fileOpenWork, null);
                 file_open.internal.work.loop = self;
                 file_open.internal.work.linked = completion;
                 tp.submit(&file_open.internal.work);
             },
             .file_close => {
                 const file_close = completion.cast(FileClose);
-                file_close.internal.work = Work.init(file_ops.fileCloseWork, null);
+                file_close.internal.work = Work.init(common.fileCloseWork, null);
                 file_close.internal.work.loop = self;
                 file_close.internal.work.linked = completion;
                 tp.submit(&file_close.internal.work);
             },
             .file_read => {
                 const file_read = completion.cast(FileRead);
-                file_read.internal.work = Work.init(file_ops.fileReadWork, null);
+                file_read.internal.work = Work.init(common.fileReadWork, null);
                 file_read.internal.work.loop = self;
                 file_read.internal.work.linked = completion;
                 tp.submit(&file_read.internal.work);
             },
             .file_write => {
                 const file_write = completion.cast(FileWrite);
-                file_write.internal.work = Work.init(file_ops.fileWriteWork, null);
+                file_write.internal.work = Work.init(common.fileWriteWork, null);
                 file_write.internal.work.loop = self;
                 file_write.internal.work.linked = completion;
                 tp.submit(&file_write.internal.work);
