@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Loop = @import("../loop.zig").Loop;
 const Backend = @import("../backend.zig").Backend;
 const Completion = @import("../completion.zig").Completion;
@@ -444,6 +445,6 @@ test "Echo server and client - IPv6" {
 }
 
 test "Echo server and client - Unix" {
-    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
     try testEcho(.unix, socket.sockaddr.un);
 }
