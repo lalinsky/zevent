@@ -52,7 +52,7 @@ const NOTE_TRIGGER: u32 = 0x01000000;
 
 allocator: std.mem.Allocator,
 kqueue_fd: i32 = -1,
-async_impl: ?AsyncImpl = null,
+waker: Waker,
 change_buffer: std.ArrayListUnmanaged(c.Kevent) = .{},
 
 pub fn init(self: *Self, allocator: std.mem.Allocator) !void {
@@ -66,20 +66,16 @@ pub fn init(self: *Self, allocator: std.mem.Allocator) !void {
     self.* = .{
         .allocator = allocator,
         .kqueue_fd = kqueue_fd,
-        .async_impl = null,
+        .waker = undefined,
         .change_buffer = .{},
     };
 
-    // Initialize AsyncImpl
-    var async_impl: AsyncImpl = undefined;
-    try async_impl.init(kqueue_fd);
-    self.async_impl = async_impl;
+    // Initialize Waker
+    try self.waker.init(kqueue_fd);
 }
 
 pub fn deinit(self: *Self) void {
-    if (self.async_impl) |*impl| {
-        impl.deinit();
-    }
+    self.waker.deinit();
     self.change_buffer.deinit(self.allocator);
     if (self.kqueue_fd != -1) {
         _ = c.close(self.kqueue_fd);
@@ -87,9 +83,7 @@ pub fn deinit(self: *Self) void {
 }
 
 pub fn wake(self: *Self) void {
-    if (self.async_impl) |*impl| {
-        impl.notify();
-    }
+    self.waker.notify();
 }
 
 fn getFilter(op: OperationType) i16 {
@@ -164,55 +158,27 @@ fn getHandle(completion: *Completion) NetHandle {
     };
 }
 
-fn processSubmissions(self: *Self, state: *LoopState) !void {
-    var submissions = state.submissions;
-    state.submissions = .{};
-
-    var operations: Queue(Completion) = .{};
-    var cancels: Queue(Completion) = .{};
-
-    // First go over cancelations and mark operations as canceled
+pub fn processSubmissions(self: *Self, state: *LoopState, submissions: *Queue(Completion)) !void {
     while (submissions.pop()) |completion| {
-        if (completion.op == .cancel) {
-            var data = completion.cast(Cancel);
-            if (data.cancel_c.canceled == null) {
-                data.cancel_c.canceled = completion;
-                cancels.push(completion);
-            } else {
-                data.result = error.AlreadyCanceled;
-                state.markCompleted(completion);
-            }
-        } else {
-            operations.push(completion);
+        switch (try self.startCompletion(completion)) {
+            .completed => state.markCompleted(completion),
+            .running => state.markRunning(completion),
         }
     }
 
-    // Now start normal operations, ignoring the canceled ones
-    // This will queue kevent changes in the buffer
-    while (operations.pop()) |completion| {
-        if (completion.state == .completed) continue;
-        if (completion.canceled != null) {
-            state.markCompleted(completion);
-        } else {
-            switch (try self.startCompletion(completion)) {
-                .completed => state.markCompleted(completion),
-                .running => state.markRunning(completion),
-            }
-        }
-    }
+    // Submit all queued changes in batches (non-blocking)
+    try self.submitChanges();
+}
 
-    // And now go over remaining cancelations and queue unregister operations
+pub fn processCancellations(self: *Self, state: *LoopState, cancels: *Queue(Completion)) !void {
     while (cancels.pop()) |completion| {
         if (completion.state == .completed) continue;
         const cancel = completion.cast(Cancel);
+
         const fd = getHandle(cancel.cancel_c);
         try self.queueUnregister(fd, cancel.cancel_c);
 
-        // Set cancel result to success
-        // The canceled operation's result will be error.Canceled via getResult()
         cancel.result = {};
-
-        // Mark the canceled operation as completed, which will recursively mark the cancel as completed
         state.markCompleted(cancel.cancel_c);
     }
 
@@ -220,10 +186,7 @@ fn processSubmissions(self: *Self, state: *LoopState) !void {
     try self.submitChanges();
 }
 
-pub fn tick(self: *Self, state: *LoopState, timeout_ms: u64) !void {
-    // Process incoming submissions, handle cancelations
-    try self.processSubmissions(state);
-
+pub fn tick(self: *Self, state: *LoopState, timeout_ms: u64) !bool {
     var events: [64]c.Kevent = undefined;
     var timeout_spec: c.timespec = undefined;
     const timeout_ptr: ?*const c.timespec = if (timeout_ms < std.math.maxInt(u64)) blk: {
@@ -241,14 +204,16 @@ pub fn tick(self: *Self, state: *LoopState, timeout_ms: u64) !void {
         else => |err| return posix.unexpectedErrno(err),
     };
 
+    if (n == 0) {
+        return true; // Timed out
+    }
+
     for (events[0..n]) |event| {
         // Check if this is the async wakeup user event
-        if (self.async_impl) |*impl| {
-            if (event.filter == EVFILT_USER and event.ident == impl.ident) {
-                state.loop.processAsyncHandles();
-                impl.drain();
-                continue;
-            }
+        if (event.filter == EVFILT_USER and event.ident == self.waker.ident) {
+            state.loop.processAsyncHandles();
+            self.waker.drain();
+            continue;
         }
 
         // Get completion pointer from udata
@@ -271,17 +236,14 @@ pub fn tick(self: *Self, state: *LoopState, timeout_ms: u64) !void {
 
     // Submit any unregister operations that were queued while processing events
     try self.submitChanges();
+
+    return false; // Did not timeout, woke up due to events
 }
 
 pub fn startCompletion(self: *Self, comp: *Completion) !enum { completed, running } {
     switch (comp.op) {
-        .timer => unreachable, // Timers are handled elsewhere in the loop
-        .async => unreachable, // Async handles are managed separately
-        .cancel => {
-            const data = comp.cast(Cancel);
-            data.cancel_c.canceled = comp;
-            return .running; // Cancel waits until target is actually cancelled
-        },
+        .timer, .async, .work => unreachable, // Manged by the loop
+        .cancel => return .running, // Cancel was marked by loop and waits until the target completes
 
         // Synchronous operations - complete immediately
         .net_open => {
@@ -450,11 +412,11 @@ pub fn checkCompletion(comp: *Completion, event: *const c.Kevent) CheckResult {
 }
 
 /// Async notification implementation using EVFILT_USER
-pub const AsyncImpl = struct {
+pub const Waker = struct {
     kqueue_fd: i32,
     ident: usize,
 
-    pub fn init(self: *AsyncImpl, kqueue_fd: i32) !void {
+    pub fn init(self: *Waker, kqueue_fd: i32) !void {
         var changes: [1]c.Kevent = .{.{
             .ident = @intFromPtr(self),
             .filter = EVFILT_USER,
@@ -478,7 +440,7 @@ pub const AsyncImpl = struct {
         };
     }
 
-    pub fn deinit(self: *AsyncImpl) void {
+    pub fn deinit(self: *Waker) void {
         var changes: [1]c.Kevent = .{.{
             .ident = self.ident,
             .filter = EVFILT_USER,
@@ -497,7 +459,7 @@ pub const AsyncImpl = struct {
     }
 
     /// Notify the event loop (thread-safe)
-    pub fn notify(self: *AsyncImpl) void {
+    pub fn notify(self: *Waker) void {
         var changes: [1]c.Kevent = .{.{
             .ident = self.ident,
             .filter = EVFILT_USER,
@@ -517,7 +479,7 @@ pub const AsyncImpl = struct {
     }
 
     /// No draining needed for EVFILT_USER
-    pub fn drain(self: *AsyncImpl) void {
+    pub fn drain(self: *Waker) void {
         _ = self;
     }
 };

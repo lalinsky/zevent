@@ -49,31 +49,26 @@ const log = std.log.scoped(.zio_poll);
 allocator: std.mem.Allocator,
 poll_queue: std.AutoHashMapUnmanaged(NetHandle, PollEntry) = .empty,
 poll_fds: std.ArrayList(socket.pollfd) = .empty,
-async_impl: ?AsyncImpl = null,
+waker: Waker,
 
 pub fn init(self: *Self, allocator: std.mem.Allocator) !void {
     self.* = .{
         .allocator = allocator,
+        .waker = undefined,
     };
 
-    // Initialize AsyncImpl
-    var async_impl: AsyncImpl = undefined;
-    try async_impl.init(self);
-    self.async_impl = async_impl;
+    // Initialize Waker
+    try self.waker.init(self);
 }
 
 pub fn deinit(self: *Self) void {
-    if (self.async_impl) |*impl| {
-        impl.deinit();
-    }
+    self.waker.deinit();
     self.poll_queue.deinit(self.allocator);
     self.poll_fds.deinit(self.allocator);
 }
 
 pub fn wake(self: *Self) void {
-    if (self.async_impl) |*impl| {
-        impl.notify();
-    }
+    self.waker.notify();
 }
 
 fn getEvents(op: OperationType) @FieldType(socket.pollfd, "events") {
@@ -131,7 +126,7 @@ fn addToPollQueue(self: *Self, fd: NetHandle, completion: *Completion) !void {
 fn removeFromPollQueue(self: *Self, fd: NetHandle, completion: *Completion) !void {
     const entry = self.poll_queue.getPtr(fd) orelse return;
 
-    entry.completions.remove(completion);
+    _ = entry.completions.remove(completion);
     if (entry.completions.head == null) {
         // No more completions - remove from poll list and poll queue
         const removed_pollfd = self.poll_fds.swapRemove(entry.index);
@@ -174,76 +169,34 @@ fn getHandle(completion: *Completion) NetHandle {
     };
 }
 
-fn processSubmissions(self: *Self, state: *LoopState) !void {
-    var submissions = state.submissions;
-    state.submissions = .{};
-
-    var operations: Queue(Completion) = .{};
-    var cancels: Queue(Completion) = .{};
-
-    // First go over cancelations and mark operations as canceled
+pub fn processSubmissions(self: *Self, state: *LoopState, submissions: *Queue(Completion)) !void {
     while (submissions.pop()) |completion| {
-        if (completion.op == .cancel) {
-            var data = completion.cast(Cancel);
-            if (data.cancel_c.canceled == null) {
-                data.cancel_c.canceled = completion;
-                cancels.push(completion);
-            } else {
-                data.result = error.AlreadyCanceled;
-                state.markCompleted(completion);
-            }
-        } else {
-            operations.push(completion);
+        switch (try self.startCompletion(completion)) {
+            .completed => state.markCompleted(completion),
+            .running => state.markRunning(completion),
         }
     }
+}
 
-    // Now start normal operations, ignoring the canceled ones
-    while (operations.pop()) |completion| {
-        if (completion.state == .completed) continue;
-        if (completion.canceled != null) {
-            state.markCompleted(completion);
-        } else {
-            switch (try self.startCompletion(completion)) {
-                .completed => state.markCompleted(completion),
-                .running => state.markRunning(completion),
-            }
-        }
-    }
-
-    // And now go over remaining cancelations and remove the operations from the poll queue
+pub fn processCancellations(self: *Self, state: *LoopState, cancels: *Queue(Completion)) !void {
     while (cancels.pop()) |completion| {
         if (completion.state == .completed) continue;
         const cancel = completion.cast(Cancel);
+
         const fd = getHandle(cancel.cancel_c);
         try self.removeFromPollQueue(fd, cancel.cancel_c);
 
-        // Set cancel result to success
-        // The canceled operation's result will be error.Canceled via getResult()
         cancel.result = {};
-
-        // Mark the canceled operation as completed, which will recursively mark the cancel as completed
         state.markCompleted(cancel.cancel_c);
     }
 }
 
-pub fn tick(self: *Self, state: *LoopState, timeout_ms: u64) !void {
-    // Process incoming submissions, handle cancelations
-    try self.processSubmissions(state);
-
+pub fn tick(self: *Self, state: *LoopState, timeout_ms: u64) !bool {
     const timeout: i32 = std.math.cast(i32, timeout_ms) orelse std.math.maxInt(i32);
-
-    // Check if we have any fds to monitor (network I/O or async_impl)
-    const has_fds = self.poll_queue.count() > 0 or self.async_impl != null;
-    if (!has_fds) {
-        if (timeout > 0) {
-            time.sleep(timeout);
-        }
-        return;
-    }
 
     const n = try socket.poll(self.poll_fds.items, timeout);
     if (n == 0) {
-        return;
+        return true; // Timed out
     }
 
     var i: usize = 0;
@@ -257,13 +210,11 @@ pub fn tick(self: *Self, state: *LoopState, timeout_ms: u64) !void {
         const fd = item.fd;
 
         // Check if this is the async wakeup fd
-        if (self.async_impl) |*impl| {
-            if (fd == impl.read_fd) {
-                state.loop.processAsyncHandles();
-                impl.drain();
-                i += 1;
-                continue;
-            }
+        if (fd == self.waker.read_fd) {
+            state.loop.processAsyncHandles();
+            self.waker.drain();
+            i += 1;
+            continue;
         }
 
         const entry = self.poll_queue.get(fd) orelse unreachable;
@@ -288,17 +239,14 @@ pub fn tick(self: *Self, state: *LoopState, timeout_ms: u64) !void {
             i += 1;
         }
     }
+
+    return false; // Did not timeout, woke up due to events
 }
 
 pub fn startCompletion(self: *Self, c: *Completion) !enum { completed, running } {
     switch (c.op) {
-        .timer => unreachable, // Timers are handled elsewhere in the loop
-        .async => unreachable, // Async handles are managed separately
-        .cancel => {
-            const data = c.cast(Cancel);
-            data.cancel_c.canceled = c;
-            return .running; // Cancel waits until target is actually cancelled
-        },
+        .timer, .async, .work => unreachable, // Manged by the loop
+        .cancel => return .running, // Cancel was marked by loop and waits until the target completes
 
         // Synchronous operations - complete immediately
         .net_open => {
@@ -460,14 +408,14 @@ pub fn checkCompletion(c: *Completion, item: *const socket.pollfd) CheckResult {
 }
 
 /// Async notification implementation using pipe (POSIX) or loopback socket (Windows)
-pub const AsyncImpl = struct {
+pub const Waker = struct {
     const builtin = @import("builtin");
 
     read_fd: socket.fd_t = undefined,
     write_fd: socket.fd_t = undefined,
     backend: *Self,
 
-    pub fn init(self: *AsyncImpl, backend: *Self) !void {
+    pub fn init(self: *Waker, backend: *Self) !void {
         socket.ensureWSAInitialized();
 
         switch (builtin.os.tag) {
@@ -500,7 +448,7 @@ pub const AsyncImpl = struct {
         });
     }
 
-    pub fn deinit(self: *AsyncImpl) void {
+    pub fn deinit(self: *Waker) void {
         // Remove from poll_fds by finding its index
         for (self.backend.poll_fds.items, 0..) |pfd, i| {
             if (pfd.fd == self.read_fd) {
@@ -514,7 +462,7 @@ pub const AsyncImpl = struct {
     }
 
     /// Notify the event loop (thread-safe)
-    pub fn notify(self: *AsyncImpl) void {
+    pub fn notify(self: *Waker) void {
         const byte: [1]u8 = .{1};
         switch (builtin.os.tag) {
             .windows => {
@@ -531,7 +479,7 @@ pub const AsyncImpl = struct {
     }
 
     /// Drain the pipe/socket (called by event loop when POLLIN is ready)
-    pub fn drain(self: *AsyncImpl) void {
+    pub fn drain(self: *Waker) void {
         var buf: [64]u8 = undefined;
         switch (builtin.os.tag) {
             .windows => {

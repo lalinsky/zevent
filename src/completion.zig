@@ -9,6 +9,7 @@ pub const OperationType = enum {
     timer,
     cancel,
     async,
+    work,
     net_open,
     net_bind,
     net_listen,
@@ -31,7 +32,7 @@ pub const Completion = struct {
     userdata: ?*anyopaque = null,
     callback: ?*const CallbackFn = null,
 
-    canceled: ?*Completion = null,
+    canceled: ?*Cancel = null,
 
     /// Intrusive linked list of completions.
     /// Used for submission queue OR poll queue (mutually exclusive).
@@ -44,7 +45,6 @@ pub const Completion = struct {
     pub const State = enum { new, adding, running, completed };
 
     pub const CallbackFn = fn (
-        userdata: ?*anyopaque,
         loop: *Loop,
         completion: *Completion,
     ) void;
@@ -55,7 +55,7 @@ pub const Completion = struct {
 
     pub fn call(c: *Completion, loop: *Loop) void {
         if (c.callback) |func| {
-            func(c.userdata, loop, c);
+            func(loop, c);
         }
     }
 
@@ -68,6 +68,16 @@ pub const Completion = struct {
         if (c.canceled != null) return error.Canceled;
         return c.cast(T).result;
     }
+
+    pub fn setResult(c: *Completion, result: anytype) void {
+        switch (c.op) {
+            .cancel => unreachable,
+            inline else => |op| {
+                const T = CompletionType(op);
+                c.cast(T).result = result;
+            },
+        }
+    }
 };
 
 pub fn completionOp(comptime T: type) OperationType {
@@ -75,6 +85,7 @@ pub fn completionOp(comptime T: type) OperationType {
         Timer => .timer,
         Cancel => .cancel,
         Async => .async,
+        Work => .work,
         NetOpen => .net_open,
         NetBind => .net_bind,
         NetListen => .net_listen,
@@ -95,6 +106,7 @@ pub fn CompletionType(comptime op: OperationType) type {
         .timer => Timer,
         .cancel => Cancel,
         .async => Async,
+        .work => Work,
         .net_open => NetOpen,
         .net_bind => NetBind,
         .net_listen => NetListen,
@@ -111,9 +123,24 @@ pub fn CompletionType(comptime op: OperationType) type {
 
 pub const Cancelable = error{Canceled};
 
+pub const Cancel = struct {
+    c: Completion,
+    cancel_c: *Completion,
+    result: Error!void = {},
+
+    pub const Error = error{ AlreadyCanceled, AlreadyCompleted };
+
+    pub fn init(cancel_c: *Completion) Cancel {
+        return .{
+            .c = .init(.cancel),
+            .cancel_c = cancel_c,
+        };
+    }
+};
+
 pub const Timer = struct {
     c: Completion,
-    result: Error!void = undefined,
+    result: Error!void = error.Canceled,
     delay_ms: u64,
     deadline_ms: u64 = 0,
     heap: HeapNode(Timer) = .{},
@@ -128,24 +155,9 @@ pub const Timer = struct {
     }
 };
 
-pub const Cancel = struct {
-    c: Completion,
-    cancel_c: *Completion,
-    result: Error!void = undefined,
-
-    pub const Error = error{AlreadyCanceled} || Cancelable;
-
-    pub fn init(cancel_c: *Completion) Cancel {
-        return .{
-            .c = .init(.cancel),
-            .cancel_c = cancel_c,
-        };
-    }
-};
-
 pub const Async = struct {
     c: Completion,
-    result: Error!void = undefined,
+    result: Error!void = error.Canceled,
     pending: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     loop: *Loop = undefined,
 
@@ -168,10 +180,42 @@ pub const Async = struct {
     }
 };
 
+pub const Work = struct {
+    c: Completion,
+    result: Error!void = error.Canceled,
+
+    func: *const WorkFn,
+    userdata: ?*anyopaque,
+
+    loop: ?*Loop = null,
+    state: std.atomic.Value(State) = std.atomic.Value(State).init(.pending),
+
+    pub const Error = error{NoThreadPool} || Cancelable;
+
+    pub const State = enum(u8) {
+        pending,
+        running,
+        completed,
+        canceled,
+    };
+
+    pub const WorkFn = fn (loop: *Loop, work: *Work) void;
+
+    pub fn init(func: *const WorkFn, userdata: ?*anyopaque) Work {
+        return .{
+            .c = .init(.work),
+            .func = func,
+            .userdata = userdata,
+        };
+    }
+};
+
 pub const NetClose = struct {
     c: Completion,
-    result: void = {},
+    result: Error!void = error.Canceled,
     handle: Backend.NetHandle,
+
+    pub const Error = Cancelable;
 
     pub fn init(handle: Backend.NetHandle) NetClose {
         return .{
@@ -183,7 +227,7 @@ pub const NetClose = struct {
 
 pub const NetShutdown = struct {
     c: Completion,
-    result: Error!void = undefined,
+    result: Error!void = error.Canceled,
     handle: Backend.NetHandle,
     how: socket.ShutdownHow,
 
@@ -200,13 +244,13 @@ pub const NetShutdown = struct {
 
 pub const NetOpen = struct {
     c: Completion,
-    result: Error!Backend.NetHandle = undefined,
+    result: Error!Backend.NetHandle = error.Canceled,
     domain: socket.Domain,
     socket_type: socket.Type,
     protocol: socket.Protocol,
     flags: socket.OpenFlags = .{ .nonblocking = true },
 
-    pub const Error = socket.OpenError;
+    pub const Error = socket.OpenError || Cancelable;
 
     pub fn init(
         domain: socket.Domain,
@@ -224,7 +268,7 @@ pub const NetOpen = struct {
 
 pub const NetBind = struct {
     c: Completion,
-    result: Error!void = undefined,
+    result: Error!void = error.Canceled,
     handle: Backend.NetHandle,
     addr: *const socket.sockaddr,
     addr_len: socket.socklen_t,
@@ -243,7 +287,7 @@ pub const NetBind = struct {
 
 pub const NetListen = struct {
     c: Completion,
-    result: Error!void = undefined,
+    result: Error!void = error.Canceled,
     handle: Backend.NetHandle,
     backlog: u31,
 
@@ -260,7 +304,7 @@ pub const NetListen = struct {
 
 pub const NetConnect = struct {
     c: Completion,
-    result: Error!void = undefined,
+    result: Error!void = error.Canceled,
     handle: Backend.NetHandle,
     addr: *const socket.sockaddr,
     addr_len: socket.socklen_t,
@@ -284,7 +328,7 @@ pub const NetConnect = struct {
 
 pub const NetAccept = struct {
     c: Completion,
-    result: Error!Backend.NetHandle = undefined,
+    result: Error!Backend.NetHandle = error.Canceled,
     handle: Backend.NetHandle,
     addr: ?*socket.sockaddr,
     addr_len: ?*socket.socklen_t,
@@ -313,7 +357,7 @@ pub const NetAccept = struct {
 
 pub const NetRecv = struct {
     c: Completion,
-    result: Error!usize = undefined,
+    result: Error!usize = error.Canceled,
     handle: Backend.NetHandle,
     buffers: []socket.iovec,
     flags: socket.RecvFlags,
@@ -337,7 +381,7 @@ pub const NetRecv = struct {
 
 pub const NetSend = struct {
     c: Completion,
-    result: Error!usize = undefined,
+    result: Error!usize = error.Canceled,
     handle: Backend.NetHandle,
     buffers: []const socket.iovec_const,
     flags: socket.SendFlags,
@@ -361,7 +405,7 @@ pub const NetSend = struct {
 
 pub const NetRecvFrom = struct {
     c: Completion,
-    result: Error!usize = undefined,
+    result: Error!usize = error.Canceled,
     handle: Backend.NetHandle,
     buffers: []socket.iovec,
     flags: socket.RecvFlags,
@@ -395,7 +439,7 @@ pub const NetRecvFrom = struct {
 
 pub const NetSendTo = struct {
     c: Completion,
-    result: Error!usize = undefined,
+    result: Error!usize = error.Canceled,
     handle: Backend.NetHandle,
     buffers: []const socket.iovec_const,
     flags: socket.SendFlags,
