@@ -23,8 +23,8 @@ const c = switch (builtin.os.tag) {
     .linux => {},
     .freebsd, .netbsd => struct {
         extern "c" fn eventfd(initval: c_uint, flags: c_int) c_int;
-        extern "c" fn eventfd_read(fd: c_int) c_int;
-        extern "c" fn eventfd_write(fd: c_int, value: c_uint) c_int;
+        extern "c" fn eventfd_read(fd: c_int, value: *c_ulonglong) c_int;
+        extern "c" fn eventfd_write(fd: c_int, value: *c_ulonglong) c_int;
     },
     else => @compileError("Unsupported OS"),
 };
@@ -71,15 +71,15 @@ pub fn eventfd(initval: u32, flags: u32) !i32 {
 /// Read the eventfd counter (8 bytes)
 pub fn eventfd_read(fd: i32) !u64 {
     var value: u64 = undefined;
-    const bytes = std.mem.asBytes(&value);
     switch (builtin.os.tag) {
         .linux => {
+            const bytes = std.mem.asBytes(&value);
             while (true) {
                 const rc = std.os.linux.read(fd, bytes.ptr, bytes.len);
                 switch (std.os.linux.E.init(rc)) {
                     .SUCCESS => {
                         std.debug.assert(rc == 8);
-                        break;
+                        return value;
                     },
                     .INTR => continue,
                     .AGAIN => return error.WouldBlock,
@@ -91,7 +91,7 @@ pub fn eventfd_read(fd: i32) !u64 {
             while (true) {
                 const rc = c.eventfd_read(fd, &value);
                 switch (posix.errno(rc)) {
-                    .SUCCESS => break,
+                    .SUCCESS => return value,
                     .INTR => continue,
                     .AGAIN => return error.WouldBlock,
                     else => |err| std.debug.panic("eventfd_read: read failed: {}", .{err}),
@@ -99,7 +99,6 @@ pub fn eventfd_read(fd: i32) !u64 {
             }
         },
     }
-    return value;
 }
 
 /// Write to the eventfd counter (8 bytes)
