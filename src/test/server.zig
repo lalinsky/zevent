@@ -12,6 +12,7 @@ const NetRecv = @import("../completion.zig").NetRecv;
 const NetSend = @import("../completion.zig").NetSend;
 const NetClose = @import("../completion.zig").NetClose;
 const socket = @import("../os/posix/socket.zig");
+const time = @import("../time.zig");
 
 pub fn EchoServer(comptime domain: socket.Domain, comptime sockaddr: type) type {
     return struct {
@@ -89,9 +90,8 @@ pub fn EchoServer(comptime domain: socket.Domain, comptime sockaddr: type) type 
                         .family = socket.AF.UNIX,
                         .path = undefined,
                     };
-                    const pid = std.os.linux.getpid();
-                    const timestamp = std.time.timestamp();
-                    _ = std.fmt.bufPrintZ(&self.server_addr.path, "/tmp/zevent-test-{d}-{d}.sock", .{ pid, timestamp }) catch unreachable;
+                    const timestamp = time.now(.realtime);
+                    _ = std.fmt.bufPrintZ(&self.server_addr.path, "/tmp/zevent-test-{d}.sock", .{timestamp}) catch unreachable;
                 },
             }
 
