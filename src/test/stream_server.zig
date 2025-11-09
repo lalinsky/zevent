@@ -189,6 +189,16 @@ pub fn EchoServer(comptime domain: socket.Domain, comptime sockaddr: type) type 
                 return;
             };
 
+            // Check for EOF (0 bytes received)
+            if (self.bytes_received == 0) {
+                self.state = .closing_client;
+                self.comp = .{ .close_client = NetClose.init(self.client_sock.?) };
+                self.comp.close_client.c.callback = closeClientCallback;
+                self.comp.close_client.c.userdata = self;
+                loop.add(&self.comp.close_client.c);
+                return;
+            }
+
             self.state = .sending;
             self.bytes_sent = 0;
             const send_buf = self.recv_buf[0..self.bytes_received];
@@ -222,11 +232,13 @@ pub fn EchoServer(comptime domain: socket.Domain, comptime sockaddr: type) type 
                 return;
             }
 
-            self.state = .closing_client;
-            self.comp = .{ .close_client = NetClose.init(self.client_sock.?) };
-            self.comp.close_client.c.callback = closeClientCallback;
-            self.comp.close_client.c.userdata = self;
-            loop.add(&self.comp.close_client.c);
+            // Full message sent - go back to receiving to check for EOF or more data
+            self.state = .receiving;
+            self.recv_iov = [_]socket.iovec{socket.iovecFromSlice(&self.recv_buf)};
+            self.comp = .{ .recv = NetRecv.init(self.client_sock.?, &self.recv_iov, .{}) };
+            self.comp.recv.c.callback = recvCallback;
+            self.comp.recv.c.userdata = self;
+            loop.add(&self.comp.recv.c);
         }
 
         fn closeClientCallback(loop: *Loop, c: *Completion) void {
