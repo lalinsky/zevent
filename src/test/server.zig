@@ -20,14 +20,12 @@ pub fn EchoServer(comptime domain: socket.Domain, comptime sockaddr: type) type 
         // Server socket
         server_sock: Backend.NetHandle = undefined,
         server_addr: sockaddr,
-        bound_port: u16 = 0,
 
         // Client socket
         client_sock: ?Backend.NetHandle = null,
 
         // Union of completions - only one active at a time
-        comp: union(enum) {
-            none: void,
+        comp: union {
             open: NetOpen,
             bind: NetBind,
             listen: NetListen,
@@ -64,7 +62,7 @@ pub fn EchoServer(comptime domain: socket.Domain, comptime sockaddr: type) type 
             var self: Self = .{
                 .loop = loop,
                 .server_addr = undefined,
-                .comp = .{ .none = {} },
+                .comp = undefined,
             };
 
             switch (domain) {
@@ -117,7 +115,6 @@ pub fn EchoServer(comptime domain: socket.Domain, comptime sockaddr: type) type 
                 return;
             };
 
-            // Start bind
             self.state = .binding;
             self.comp = .{ .bind = NetBind.init(
                 self.server_sock,
@@ -138,34 +135,13 @@ pub fn EchoServer(comptime domain: socket.Domain, comptime sockaddr: type) type 
                 return;
             };
 
-            // Get the actual bound port/path
-            switch (domain) {
-                .ipv4 => {
-                    var bound_addr: socket.sockaddr.in = undefined;
-                    var bound_addr_len: socket.socklen_t = @sizeOf(@TypeOf(bound_addr));
-                    socket.getsockname(self.server_sock, @ptrCast(&bound_addr), &bound_addr_len) catch {
-                        self.state = .failed;
-                        loop.stop();
-                        return;
-                    };
-                    self.bound_port = std.mem.bigToNative(u16, bound_addr.port);
-                },
-                .ipv6 => {
-                    var bound_addr: socket.sockaddr.in6 = undefined;
-                    var bound_addr_len: socket.socklen_t = @sizeOf(@TypeOf(bound_addr));
-                    socket.getsockname(self.server_sock, @ptrCast(&bound_addr), &bound_addr_len) catch {
-                        self.state = .failed;
-                        loop.stop();
-                        return;
-                    };
-                    self.bound_port = std.mem.bigToNative(u16, bound_addr.port);
-                },
-                .unix => {
-                    // Unix sockets don't have ports
-                },
-            }
+            var addr_len: socket.socklen_t = @sizeOf(sockaddr);
+            socket.getsockname(self.server_sock, @ptrCast(&self.server_addr), &addr_len) catch {
+                self.state = .failed;
+                loop.stop();
+                return;
+            };
 
-            // Start listen
             self.state = .listening;
             self.comp = .{ .listen = NetListen.init(self.server_sock, 1) };
             self.comp.listen.c.callback = listenCallback;
@@ -182,7 +158,6 @@ pub fn EchoServer(comptime domain: socket.Domain, comptime sockaddr: type) type 
                 return;
             };
 
-            // Start accept
             self.state = .accepting;
             self.comp = .{ .accept = NetAccept.init(self.server_sock, null, null) };
             self.comp.accept.c.callback = acceptCallback;
@@ -199,7 +174,6 @@ pub fn EchoServer(comptime domain: socket.Domain, comptime sockaddr: type) type 
                 return;
             };
 
-            // Start recv
             self.state = .receiving;
             self.recv_iov = [_]socket.iovec{socket.iovecFromSlice(&self.recv_buf)};
             self.comp = .{ .recv = NetRecv.init(self.client_sock.?, &self.recv_iov, .{}) };
@@ -217,7 +191,6 @@ pub fn EchoServer(comptime domain: socket.Domain, comptime sockaddr: type) type 
                 return;
             };
 
-            // Echo back
             self.state = .sending;
             const send_buf = self.recv_buf[0..self.bytes_received];
             self.send_iov = [_]socket.iovec_const{socket.iovecConstFromSlice(send_buf)};
@@ -236,7 +209,6 @@ pub fn EchoServer(comptime domain: socket.Domain, comptime sockaddr: type) type 
                 return;
             };
 
-            // Close client socket
             self.state = .closing_client;
             self.comp = .{ .close_client = NetClose.init(self.client_sock.?) };
             self.comp.close_client.c.callback = closeClientCallback;
@@ -253,7 +225,6 @@ pub fn EchoServer(comptime domain: socket.Domain, comptime sockaddr: type) type 
                 return;
             };
 
-            // Close server socket
             self.state = .closing_server;
             self.comp = .{ .close_server = NetClose.init(self.server_sock) };
             self.comp.close_server.c.callback = closeServerCallback;
@@ -280,12 +251,11 @@ pub fn EchoClient(comptime domain: socket.Domain, comptime sockaddr: type) type 
         state: State = .init,
         loop: *Loop,
 
-        server_port_or_path: if (domain == .unix) []const u8 else u16,
         client_sock: Backend.NetHandle = undefined,
         connect_addr: sockaddr,
 
         // Union of completions - only one active at a time
-        comp: union(enum) {
+        comp: union {
             open: NetOpen,
             connect: NetConnect,
             send: NetSend,
@@ -313,13 +283,12 @@ pub fn EchoClient(comptime domain: socket.Domain, comptime sockaddr: type) type 
 
         const Self = @This();
 
-        pub fn init(loop: *Loop, server_port_or_path: if (domain == .unix) []const u8 else u16, message: []const u8) Self {
+        pub fn init(loop: *Loop, server_addr: sockaddr, message: []const u8) Self {
             var self: Self = .{
                 .loop = loop,
-                .server_port_or_path = server_port_or_path,
+                .connect_addr = server_addr,
                 .send_buf = message,
                 .comp = undefined,
-                .connect_addr = undefined,
             };
 
             const protocol: socket.Protocol = if (domain == .unix) .default else .tcp;
@@ -344,35 +313,7 @@ pub fn EchoClient(comptime domain: socket.Domain, comptime sockaddr: type) type 
                 return;
             };
 
-            // Start connect
             self.state = .connecting;
-            switch (domain) {
-                .ipv4 => {
-                    self.connect_addr = .{
-                        .family = socket.AF.INET,
-                        .addr = @bitCast([4]u8{ 127, 0, 0, 1 }),
-                        .port = std.mem.nativeToBig(u16, self.server_port_or_path),
-                        .zero = [_]u8{0} ** 8,
-                    };
-                },
-                .ipv6 => {
-                    self.connect_addr = .{
-                        .family = socket.AF.INET6,
-                        .addr = [_]u8{0} ** 15 ++ [_]u8{1}, // ::1
-                        .port = std.mem.nativeToBig(u16, self.server_port_or_path),
-                        .flowinfo = 0,
-                        .scope_id = 0,
-                    };
-                },
-                .unix => {
-                    self.connect_addr = .{
-                        .family = socket.AF.UNIX,
-                        .path = undefined,
-                    };
-                    @memcpy(self.connect_addr.path[0..self.server_port_or_path.len], self.server_port_or_path);
-                    self.connect_addr.path[self.server_port_or_path.len] = 0;
-                },
-            }
             self.comp = .{ .connect = NetConnect.init(
                 self.client_sock,
                 @ptrCast(&self.connect_addr),
@@ -392,7 +333,6 @@ pub fn EchoClient(comptime domain: socket.Domain, comptime sockaddr: type) type 
                 return;
             };
 
-            // Start send
             self.state = .sending;
             self.send_iov = [_]socket.iovec_const{socket.iovecConstFromSlice(self.send_buf)};
             self.comp = .{ .send = NetSend.init(self.client_sock, &self.send_iov, .{}) };
@@ -410,7 +350,6 @@ pub fn EchoClient(comptime domain: socket.Domain, comptime sockaddr: type) type 
                 return;
             };
 
-            // Start recv
             self.state = .receiving;
             self.recv_iov = [_]socket.iovec{socket.iovecFromSlice(&self.recv_buf)};
             self.comp = .{ .recv = NetRecv.init(self.client_sock, &self.recv_iov, .{}) };
@@ -428,7 +367,6 @@ pub fn EchoClient(comptime domain: socket.Domain, comptime sockaddr: type) type 
                 return;
             };
 
-            // Close socket
             self.state = .closing;
             self.comp = .{ .close = NetClose.init(self.client_sock) };
             self.comp.close.c.callback = closeCallback;
@@ -484,11 +422,7 @@ fn testEcho(comptime domain: socket.Domain, comptime sockaddr: type) !void {
 
     // Start client
     const message = "Hello, Echo Server!";
-    const port_or_path = if (domain == .unix)
-        std.mem.sliceTo(&server.server_addr.path, 0)
-    else
-        server.bound_port;
-    var client = Client.init(&loop, port_or_path, message);
+    var client = Client.init(&loop, server.server_addr, message);
     client.start();
 
     // Run until both are done
