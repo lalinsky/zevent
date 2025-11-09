@@ -23,6 +23,8 @@ const NetShutdown = @import("../completion.zig").NetShutdown;
 
 pub const NetHandle = net.fd_t;
 
+pub const supports_file_ops = false;
+
 pub const NetOpenError = error{
     Unexpected,
 };
@@ -314,23 +316,8 @@ pub fn startCompletion(self: *Self, comp: *Completion) !enum { completed, runnin
             return .running;
         },
 
-        // File operations not supported in kqueue backend
-        .file_open => {
-            comp.setError(error.Unexpected);
-            return .completed;
-        },
-        .file_close => {
-            comp.setError(error.Unexpected);
-            return .completed;
-        },
-        .file_read => {
-            comp.setError(error.Unexpected);
-            return .completed;
-        },
-        .file_write => {
-            comp.setError(error.Unexpected);
-            return .completed;
-        },
+        // File operations are handled by Loop via thread pool
+        .file_open, .file_close, .file_read, .file_write => unreachable,
     }
 }
 

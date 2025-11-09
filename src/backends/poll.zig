@@ -22,6 +22,8 @@ const NetShutdown = @import("../completion.zig").NetShutdown;
 
 pub const NetHandle = net.fd_t;
 
+pub const supports_file_ops = false;
+
 pub const NetOpenError = error{
     Unexpected,
 };
@@ -317,23 +319,8 @@ pub fn startCompletion(self: *Self, c: *Completion) !enum { completed, running }
             return .running;
         },
 
-        // File operations not supported in poll backend
-        .file_open => {
-            c.setError(error.Unexpected);
-            return .completed;
-        },
-        .file_close => {
-            c.setError(error.Unexpected);
-            return .completed;
-        },
-        .file_read => {
-            c.setError(error.Unexpected);
-            return .completed;
-        },
-        .file_write => {
-            c.setError(error.Unexpected);
-            return .completed;
-        },
+        // File operations are handled by Loop via thread pool
+        .file_open, .file_close, .file_read, .file_write => unreachable,
     }
 }
 

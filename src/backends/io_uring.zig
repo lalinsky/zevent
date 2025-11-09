@@ -27,6 +27,8 @@ const FileWrite = @import("../completion.zig").FileWrite;
 
 pub const NetHandle = net.fd_t;
 
+pub const supports_file_ops = true;
+
 pub const NetRecvData = struct {
     msg: linux.msghdr = undefined,
 };

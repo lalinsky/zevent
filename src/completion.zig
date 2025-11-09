@@ -228,6 +228,7 @@ pub const Work = struct {
     userdata: ?*anyopaque,
 
     loop: ?*Loop = null,
+    linked: ?*Completion = null,
     state: std.atomic.Value(State) = std.atomic.Value(State).init(.pending),
 
     pub const Error = error{NoThreadPool} || Cancelable;
@@ -512,7 +513,10 @@ pub const NetSendTo = struct {
 pub const FileOpen = struct {
     c: Completion,
     result_private_do_not_touch: fs.fd_t = undefined,
-    internal: if (@hasDecl(Backend, "FileOpenData")) Backend.FileOpenData else struct {} = .{},
+    internal: switch (@hasDecl(Backend, "supports_file_ops") and Backend.supports_file_ops) {
+        true => if (@hasDecl(Backend, "FileOpenData")) Backend.FileOpenData else struct {},
+        false => struct { work: Work = undefined, allocator: std.mem.Allocator = undefined },
+    } = .{},
     dir: fs.fd_t,
     path: []const u8,
     mode: fs.mode_t,
@@ -538,6 +542,10 @@ pub const FileOpen = struct {
 pub const FileClose = struct {
     c: Completion,
     result_private_do_not_touch: void = {},
+    internal: switch (@hasDecl(Backend, "supports_file_ops") and Backend.supports_file_ops) {
+        true => if (@hasDecl(Backend, "FileCloseData")) Backend.FileCloseData else struct {},
+        false => struct { work: Work = undefined },
+    } = .{},
     handle: fs.fd_t,
 
     pub const Error = Cancelable;
@@ -557,6 +565,10 @@ pub const FileClose = struct {
 pub const FileRead = struct {
     c: Completion,
     result_private_do_not_touch: usize = undefined,
+    internal: switch (@hasDecl(Backend, "supports_file_ops") and Backend.supports_file_ops) {
+        true => if (@hasDecl(Backend, "FileReadData")) Backend.FileReadData else struct {},
+        false => struct { work: Work = undefined },
+    } = .{},
     handle: fs.fd_t,
     buffers: []fs.iovec,
     offset: u64,
@@ -580,6 +592,10 @@ pub const FileRead = struct {
 pub const FileWrite = struct {
     c: Completion,
     result_private_do_not_touch: usize = undefined,
+    internal: switch (@hasDecl(Backend, "supports_file_ops") and Backend.supports_file_ops) {
+        true => if (@hasDecl(Backend, "FileWriteData")) Backend.FileWriteData else struct {},
+        false => struct { work: Work = undefined },
+    } = .{},
     handle: fs.fd_t,
     buffers: []const fs.iovec_const,
     offset: u64,

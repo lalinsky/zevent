@@ -77,3 +77,109 @@ pub const FileWriteError = error{
     LockViolation,
     Unexpected,
 };
+
+/// Open a file using openat() syscall
+pub fn openat(allocator: std.mem.Allocator, dir: fd_t, path: []const u8, mode: mode_t, flags: FileOpenFlags) FileOpenError!fd_t {
+    if (builtin.os.tag == .windows) {
+        // TODO: Windows implementation
+        return error.Unexpected;
+    }
+
+    var open_flags: posix.system.O = .{
+        .ACCMODE = .RDWR,
+        .CLOEXEC = true,
+    };
+    if (flags.create) open_flags.CREAT = true;
+    if (flags.truncate) open_flags.TRUNC = true;
+    if (flags.append) open_flags.APPEND = true;
+    if (flags.exclusive) open_flags.EXCL = true;
+
+    const path_z = allocator.dupeZ(u8, path) catch return error.SystemResources;
+    defer allocator.free(path_z);
+
+    const rc = posix.system.openat(dir, path_z.ptr, open_flags, mode);
+    return switch (posix.errno(rc)) {
+        .SUCCESS => @intCast(rc),
+        .ACCES => error.AccessDenied,
+        .PERM => error.PermissionDenied,
+        .LOOP => error.SymLinkLoop,
+        .MFILE => error.ProcessFdQuotaExceeded,
+        .NFILE => error.SystemFdQuotaExceeded,
+        .NODEV => error.NoDevice,
+        .NOENT => error.FileNotFound,
+        .NAMETOOLONG => error.NameTooLong,
+        .NOMEM => error.SystemResources,
+        .FBIG => error.FileTooBig,
+        .ISDIR => error.IsDir,
+        .NOSPC => error.NoSpaceLeft,
+        .NOTDIR => error.NotDir,
+        .EXIST => error.PathAlreadyExists,
+        .BUSY => error.DeviceBusy,
+        .TXTBSY => error.FileBusy,
+        else => |e| posix.unexpectedErrno(e) catch error.Unexpected,
+    };
+}
+
+/// Close a file descriptor
+pub fn close(fd: fd_t) error{}!void {
+    if (builtin.os.tag == .windows) {
+        // TODO: Windows implementation
+        return;
+    }
+
+    // close() errors are generally ignored in async contexts
+    // because the fd is invalid after close regardless of error
+    _ = posix.system.close(fd);
+}
+
+/// Read from file at offset using preadv()
+pub fn preadv(fd: fd_t, buffers: []iovec, offset: u64) FileReadError!usize {
+    if (builtin.os.tag == .windows) {
+        // TODO: Windows implementation
+        return error.Unexpected;
+    }
+
+    const rc = posix.system.preadv(fd, buffers.ptr, buffers.len, @intCast(offset));
+    return switch (posix.errno(rc)) {
+        .SUCCESS => @intCast(rc),
+        .ACCES => error.AccessDenied,
+        .AGAIN => error.WouldBlock,
+        .CONNRESET => error.ConnectionResetByPeer,
+        .TIMEDOUT => error.ConnectionTimedOut,
+        .IO => error.InputOutput,
+        .ISDIR => error.IsDir,
+        .CANCELED => error.OperationAborted,
+        .PIPE => error.BrokenPipe,
+        .NOMEM => error.SystemResources,
+        .NOTCONN => error.SocketNotConnected,
+        .BADF => error.NotOpenForReading,
+        else => |e| posix.unexpectedErrno(e) catch error.Unexpected,
+    };
+}
+
+/// Write to file at offset using pwritev()
+pub fn pwritev(fd: fd_t, buffers: []const iovec_const, offset: u64) FileWriteError!usize {
+    if (builtin.os.tag == .windows) {
+        // TODO: Windows implementation
+        return error.Unexpected;
+    }
+
+    const rc = posix.system.pwritev(fd, buffers.ptr, buffers.len, @intCast(offset));
+    return switch (posix.errno(rc)) {
+        .SUCCESS => @intCast(rc),
+        .ACCES => error.AccessDenied,
+        .AGAIN => error.WouldBlock,
+        .CONNRESET => error.ConnectionResetByPeer,
+        .TIMEDOUT => error.ConnectionTimedOut,
+        .IO => error.InputOutput,
+        .NOSPC => error.NoSpaceLeft,
+        .CANCELED => error.OperationAborted,
+        .PIPE => error.BrokenPipe,
+        .NOMEM => error.SystemResources,
+        .NOTCONN => error.SocketNotConnected,
+        .BADF => error.NotOpenForWriting,
+        .DQUOT => error.DiskQuota,
+        .FBIG => error.FileTooBig,
+        else => |e| posix.unexpectedErrno(e) catch error.Unexpected,
+    };
+}
