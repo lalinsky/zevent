@@ -34,7 +34,7 @@ pub fn unexpectedErrno(err: system.E) error{Unexpected} {
             \\please file a bug report: https://github.com/lalinsky/aio.zig/issues/new
             \\
         , .{@intFromEnum(err)});
-        std.debug.dumpCurrentStackTrace(null);
+        std.debug.dumpCurrentStackTrace(.{});
     }
     return error.Unexpected;
 }
