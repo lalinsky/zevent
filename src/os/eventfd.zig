@@ -24,7 +24,7 @@ const c = switch (builtin.os.tag) {
     .freebsd, .netbsd => struct {
         extern "c" fn eventfd(initval: c_uint, flags: c_int) c_int;
         extern "c" fn eventfd_read(fd: c_int, value: *c_ulonglong) c_int;
-        extern "c" fn eventfd_write(fd: c_int, value: *c_ulonglong) c_int;
+        extern "c" fn eventfd_write(fd: c_int, value: c_ulonglong) c_int;
     },
     else => @compileError("Unsupported OS"),
 };
