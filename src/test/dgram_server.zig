@@ -5,11 +5,8 @@ const Backend = @import("../backend.zig").Backend;
 const Completion = @import("../completion.zig").Completion;
 const NetOpen = @import("../completion.zig").NetOpen;
 const NetBind = @import("../completion.zig").NetBind;
-const NetListen = @import("../completion.zig").NetListen;
-const NetAccept = @import("../completion.zig").NetAccept;
-const NetConnect = @import("../completion.zig").NetConnect;
-const NetRecv = @import("../completion.zig").NetRecv;
-const NetSend = @import("../completion.zig").NetSend;
+const NetRecvFrom = @import("../completion.zig").NetRecvFrom;
+const NetSendTo = @import("../completion.zig").NetSendTo;
 const NetClose = @import("../completion.zig").NetClose;
 const socket = @import("../os/posix/socket.zig");
 const time = @import("../time.zig");
@@ -23,19 +20,17 @@ pub fn EchoServer(comptime domain: socket.Domain, comptime sockaddr: type) type 
         server_sock: Backend.NetHandle = undefined,
         server_addr: sockaddr,
 
-        // Client socket
-        client_sock: ?Backend.NetHandle = null,
+        // Client address
+        client_addr: sockaddr = undefined,
+        client_addr_len: socket.socklen_t = undefined,
 
         // Union of completions - only one active at a time
         comp: union {
             open: NetOpen,
             bind: NetBind,
-            listen: NetListen,
-            accept: NetAccept,
-            recv: NetRecv,
-            send: NetSend,
-            close_client: NetClose,
-            close_server: NetClose,
+            recvfrom: NetRecvFrom,
+            sendto: NetSendTo,
+            close: NetClose,
         },
 
         // Buffer for echo
@@ -43,18 +38,14 @@ pub fn EchoServer(comptime domain: socket.Domain, comptime sockaddr: type) type 
         recv_iov: [1]socket.iovec = undefined,
         send_iov: [1]socket.iovec_const = undefined,
         bytes_received: usize = 0,
-        bytes_sent: usize = 0,
 
         pub const State = enum {
             init,
             opening,
             binding,
-            listening,
-            accepting,
             receiving,
             sending,
-            closing_client,
-            closing_server,
+            closing,
             done,
             failed,
         };
@@ -92,7 +83,7 @@ pub fn EchoServer(comptime domain: socket.Domain, comptime sockaddr: type) type 
                         .path = undefined,
                     };
                     const timestamp = time.now(.realtime);
-                    _ = std.fmt.bufPrintZ(&self.server_addr.path, "/tmp/zevent-test-{d}.sock", .{timestamp}) catch unreachable;
+                    _ = std.fmt.bufPrintZ(&self.server_addr.path, "/tmp/zevent-dgram-test-{d}.sock", .{timestamp}) catch unreachable;
                 },
             }
 
@@ -101,8 +92,8 @@ pub fn EchoServer(comptime domain: socket.Domain, comptime sockaddr: type) type 
 
         pub fn start(self: *Self) void {
             self.state = .opening;
-            const protocol: socket.Protocol = if (domain == .unix) .default else .tcp;
-            self.comp = .{ .open = NetOpen.init(domain, .stream, protocol) };
+            const protocol: socket.Protocol = if (domain == .unix) .default else .udp;
+            self.comp = .{ .open = NetOpen.init(domain, .dgram, protocol) };
             self.comp.open.c.callback = openCallback;
             self.comp.open.c.userdata = self;
             self.loop.add(&self.comp.open.c);
@@ -144,115 +135,56 @@ pub fn EchoServer(comptime domain: socket.Domain, comptime sockaddr: type) type 
                 return;
             };
 
-            self.state = .listening;
-            self.comp = .{ .listen = NetListen.init(self.server_sock, 1) };
-            self.comp.listen.c.callback = listenCallback;
-            self.comp.listen.c.userdata = self;
-            loop.add(&self.comp.listen.c);
-        }
-
-        fn listenCallback(loop: *Loop, c: *Completion) void {
-            const self: *Self = @ptrCast(@alignCast(c.userdata.?));
-
-            self.comp.listen.c.getResult(.net_listen) catch {
-                self.state = .failed;
-                loop.stop();
-                return;
-            };
-
-            self.state = .accepting;
-            self.comp = .{ .accept = NetAccept.init(self.server_sock, null, null) };
-            self.comp.accept.c.callback = acceptCallback;
-            self.comp.accept.c.userdata = self;
-            loop.add(&self.comp.accept.c);
-        }
-
-        fn acceptCallback(loop: *Loop, c: *Completion) void {
-            const self: *Self = @ptrCast(@alignCast(c.userdata.?));
-
-            self.client_sock = self.comp.accept.getResult() catch {
-                self.state = .failed;
-                loop.stop();
-                return;
-            };
-
+            // Start receiving
             self.state = .receiving;
             self.recv_iov = [_]socket.iovec{socket.iovecFromSlice(&self.recv_buf)};
-            self.comp = .{ .recv = NetRecv.init(self.client_sock.?, &self.recv_iov, .{}) };
-            self.comp.recv.c.callback = recvCallback;
-            self.comp.recv.c.userdata = self;
-            loop.add(&self.comp.recv.c);
+            self.client_addr_len = @sizeOf(sockaddr);
+            self.comp = .{ .recvfrom = NetRecvFrom.init(self.server_sock, &self.recv_iov, .{}, @ptrCast(&self.client_addr), &self.client_addr_len) };
+            self.comp.recvfrom.c.callback = recvCallback;
+            self.comp.recvfrom.c.userdata = self;
+            loop.add(&self.comp.recvfrom.c);
         }
 
         fn recvCallback(loop: *Loop, c: *Completion) void {
             const self: *Self = @ptrCast(@alignCast(c.userdata.?));
 
-            self.bytes_received = self.comp.recv.getResult() catch {
+            self.bytes_received = self.comp.recvfrom.getResult() catch {
                 self.state = .failed;
                 loop.stop();
                 return;
             };
 
+            // Echo back to sender
             self.state = .sending;
-            self.bytes_sent = 0;
             const send_buf = self.recv_buf[0..self.bytes_received];
             self.send_iov = [_]socket.iovec_const{socket.iovecConstFromSlice(send_buf)};
-            self.comp = .{ .send = NetSend.init(self.client_sock.?, &self.send_iov, .{}) };
-            self.comp.send.c.callback = sendCallback;
-            self.comp.send.c.userdata = self;
-            loop.add(&self.comp.send.c);
+            self.comp = .{ .sendto = NetSendTo.init(self.server_sock, &self.send_iov, .{}, @ptrCast(&self.client_addr), self.client_addr_len) };
+            self.comp.sendto.c.callback = sendCallback;
+            self.comp.sendto.c.userdata = self;
+            loop.add(&self.comp.sendto.c);
         }
 
         fn sendCallback(loop: *Loop, c: *Completion) void {
             const self: *Self = @ptrCast(@alignCast(c.userdata.?));
 
-            const bytes_written = self.comp.send.getResult() catch {
+            _ = self.comp.sendto.getResult() catch {
                 self.state = .failed;
                 loop.stop();
                 return;
             };
 
-            self.bytes_sent += bytes_written;
-
-            // Check if we've sent everything
-            if (self.bytes_sent < self.bytes_received) {
-                // Partial write - continue sending remaining data
-                const remaining = self.recv_buf[self.bytes_sent..self.bytes_received];
-                self.send_iov = [_]socket.iovec_const{socket.iovecConstFromSlice(remaining)};
-                self.comp = .{ .send = NetSend.init(self.client_sock.?, &self.send_iov, .{}) };
-                self.comp.send.c.callback = sendCallback;
-                self.comp.send.c.userdata = self;
-                loop.add(&self.comp.send.c);
-                return;
-            }
-
-            self.state = .closing_client;
-            self.comp = .{ .close_client = NetClose.init(self.client_sock.?) };
-            self.comp.close_client.c.callback = closeClientCallback;
-            self.comp.close_client.c.userdata = self;
-            loop.add(&self.comp.close_client.c);
+            // Close server socket
+            self.state = .closing;
+            self.comp = .{ .close = NetClose.init(self.server_sock) };
+            self.comp.close.c.callback = closeCallback;
+            self.comp.close.c.userdata = self;
+            loop.add(&self.comp.close.c);
         }
 
-        fn closeClientCallback(loop: *Loop, c: *Completion) void {
+        fn closeCallback(loop: *Loop, c: *Completion) void {
             const self: *Self = @ptrCast(@alignCast(c.userdata.?));
 
-            self.comp.close_client.c.getResult(.net_close) catch {
-                self.state = .failed;
-                loop.stop();
-                return;
-            };
-
-            self.state = .closing_server;
-            self.comp = .{ .close_server = NetClose.init(self.server_sock) };
-            self.comp.close_server.c.callback = closeServerCallback;
-            self.comp.close_server.c.userdata = self;
-            loop.add(&self.comp.close_server.c);
-        }
-
-        fn closeServerCallback(loop: *Loop, c: *Completion) void {
-            const self: *Self = @ptrCast(@alignCast(c.userdata.?));
-
-            self.comp.close_server.c.getResult(.net_close) catch {
+            self.comp.close.c.getResult(.net_close) catch {
                 self.state = .failed;
                 loop.stop();
                 return;
@@ -269,14 +201,15 @@ pub fn EchoClient(comptime domain: socket.Domain, comptime sockaddr: type) type 
         loop: *Loop,
 
         client_sock: Backend.NetHandle = undefined,
-        connect_addr: sockaddr,
+        client_addr: sockaddr = undefined,
+        server_addr: sockaddr,
 
         // Union of completions - only one active at a time
         comp: union {
             open: NetOpen,
-            connect: NetConnect,
-            send: NetSend,
-            recv: NetRecv,
+            bind: NetBind,
+            sendto: NetSendTo,
+            recvfrom: NetRecvFrom,
             close: NetClose,
         },
 
@@ -285,12 +218,14 @@ pub fn EchoClient(comptime domain: socket.Domain, comptime sockaddr: type) type 
         send_iov: [1]socket.iovec_const = undefined,
         recv_buf: [1024]u8 = undefined,
         recv_iov: [1]socket.iovec = undefined,
+        recv_addr: sockaddr = undefined,
+        recv_addr_len: socket.socklen_t = undefined,
         bytes_received: usize = 0,
 
         pub const State = enum {
             init,
             opening,
-            connecting,
+            binding,
             sending,
             receiving,
             closing,
@@ -303,13 +238,23 @@ pub fn EchoClient(comptime domain: socket.Domain, comptime sockaddr: type) type 
         pub fn init(loop: *Loop, server_addr: sockaddr, message: []const u8) Self {
             var self: Self = .{
                 .loop = loop,
-                .connect_addr = server_addr,
+                .server_addr = server_addr,
                 .send_buf = message,
                 .comp = undefined,
             };
 
-            const protocol: socket.Protocol = if (domain == .unix) .default else .tcp;
-            self.comp = .{ .open = NetOpen.init(domain, .stream, protocol) };
+            // For Unix domain sockets, client needs to bind to a path too
+            if (domain == .unix) {
+                self.client_addr = .{
+                    .family = socket.AF.UNIX,
+                    .path = undefined,
+                };
+                const timestamp = time.now(.realtime);
+                _ = std.fmt.bufPrintZ(&self.client_addr.path, "/tmp/zevent-dgram-client-{d}.sock", .{timestamp}) catch unreachable;
+            }
+
+            const protocol: socket.Protocol = if (domain == .unix) .default else .udp;
+            self.comp = .{ .open = NetOpen.init(domain, .dgram, protocol) };
 
             return self;
         }
@@ -330,60 +275,75 @@ pub fn EchoClient(comptime domain: socket.Domain, comptime sockaddr: type) type 
                 return;
             };
 
-            self.state = .connecting;
-            self.comp = .{ .connect = NetConnect.init(
-                self.client_sock,
-                @ptrCast(&self.connect_addr),
-                @sizeOf(sockaddr),
-            ) };
-            self.comp.connect.c.callback = connectCallback;
-            self.comp.connect.c.userdata = self;
-            loop.add(&self.comp.connect.c);
+            // For Unix domain sockets, bind client to a path
+            if (domain == .unix) {
+                self.state = .binding;
+                self.comp = .{ .bind = NetBind.init(
+                    self.client_sock,
+                    @ptrCast(&self.client_addr),
+                    @sizeOf(sockaddr),
+                ) };
+                self.comp.bind.c.callback = bindCallback;
+                self.comp.bind.c.userdata = self;
+                loop.add(&self.comp.bind.c);
+            } else {
+                // Start send directly for IP sockets
+                self.state = .sending;
+                self.send_iov = [_]socket.iovec_const{socket.iovecConstFromSlice(self.send_buf)};
+                self.comp = .{ .sendto = NetSendTo.init(self.client_sock, &self.send_iov, .{}, @ptrCast(&self.server_addr), @sizeOf(sockaddr)) };
+                self.comp.sendto.c.callback = sendCallback;
+                self.comp.sendto.c.userdata = self;
+                loop.add(&self.comp.sendto.c);
+            }
         }
 
-        fn connectCallback(loop: *Loop, c: *Completion) void {
+        fn bindCallback(loop: *Loop, c: *Completion) void {
             const self: *Self = @ptrCast(@alignCast(c.userdata.?));
 
-            self.comp.connect.getResult() catch {
+            self.comp.bind.c.getResult(.net_bind) catch {
                 self.state = .failed;
                 loop.stop();
                 return;
             };
 
+            // Start send
             self.state = .sending;
             self.send_iov = [_]socket.iovec_const{socket.iovecConstFromSlice(self.send_buf)};
-            self.comp = .{ .send = NetSend.init(self.client_sock, &self.send_iov, .{}) };
-            self.comp.send.c.callback = sendCallback;
-            self.comp.send.c.userdata = self;
-            loop.add(&self.comp.send.c);
+            self.comp = .{ .sendto = NetSendTo.init(self.client_sock, &self.send_iov, .{}, @ptrCast(&self.server_addr), @sizeOf(sockaddr)) };
+            self.comp.sendto.c.callback = sendCallback;
+            self.comp.sendto.c.userdata = self;
+            loop.add(&self.comp.sendto.c);
         }
 
         fn sendCallback(loop: *Loop, c: *Completion) void {
             const self: *Self = @ptrCast(@alignCast(c.userdata.?));
 
-            _ = self.comp.send.getResult() catch {
+            _ = self.comp.sendto.getResult() catch {
                 self.state = .failed;
                 loop.stop();
                 return;
             };
 
+            // Start recv
             self.state = .receiving;
             self.recv_iov = [_]socket.iovec{socket.iovecFromSlice(&self.recv_buf)};
-            self.comp = .{ .recv = NetRecv.init(self.client_sock, &self.recv_iov, .{}) };
-            self.comp.recv.c.callback = recvCallback;
-            self.comp.recv.c.userdata = self;
-            loop.add(&self.comp.recv.c);
+            self.recv_addr_len = @sizeOf(sockaddr);
+            self.comp = .{ .recvfrom = NetRecvFrom.init(self.client_sock, &self.recv_iov, .{}, @ptrCast(&self.recv_addr), &self.recv_addr_len) };
+            self.comp.recvfrom.c.callback = recvCallback;
+            self.comp.recvfrom.c.userdata = self;
+            loop.add(&self.comp.recvfrom.c);
         }
 
         fn recvCallback(loop: *Loop, c: *Completion) void {
             const self: *Self = @ptrCast(@alignCast(c.userdata.?));
 
-            self.bytes_received = self.comp.recv.getResult() catch {
+            self.bytes_received = self.comp.recvfrom.getResult() catch {
                 self.state = .failed;
                 loop.stop();
                 return;
             };
 
+            // Close socket
             self.state = .closing;
             self.comp = .{ .close = NetClose.init(self.client_sock) };
             self.comp.close.c.callback = closeCallback;
@@ -423,9 +383,9 @@ fn testEcho(comptime domain: socket.Domain, comptime sockaddr: type) !void {
     }
     server.start();
 
-    // Run loop until server reaches accepting state
+    // Run loop until server reaches receiving state
     var iterations: usize = 0;
-    while (server.state != .accepting and server.state != .failed) {
+    while (server.state != .receiving and server.state != .failed) {
         try loop.run(.once);
         iterations += 1;
         if (iterations > 100) {
@@ -440,6 +400,12 @@ fn testEcho(comptime domain: socket.Domain, comptime sockaddr: type) !void {
     // Start client
     const message = "Hello, Echo Server!";
     var client = Client.init(&loop, server.server_addr, message);
+    defer {
+        if (domain == .unix) {
+            const path = std.mem.sliceTo(&client.client_addr.path, 0);
+            std.fs.deleteFileAbsolute(path) catch {};
+        }
+    }
     client.start();
 
     // Run until both are done
@@ -452,15 +418,15 @@ fn testEcho(comptime domain: socket.Domain, comptime sockaddr: type) !void {
     try std.testing.expectEqualStrings(message, client.recv_buf[0..client.bytes_received]);
 }
 
-test "Echo server and client - IPv4" {
+test "Echo server and client - IPv4 UDP" {
     try testEcho(.ipv4, socket.sockaddr.in);
 }
 
-test "Echo server and client - IPv6" {
+test "Echo server and client - IPv6 UDP" {
     try testEcho(.ipv6, socket.sockaddr.in6);
 }
 
-test "Echo server and client - Unix" {
+test "Echo server and client - Unix datagram" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
     try testEcho(.unix, socket.sockaddr.un);
 }

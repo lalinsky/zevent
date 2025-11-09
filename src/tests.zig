@@ -19,7 +19,8 @@ const time = @import("time.zig");
 
 test {
     _ = @import("test/thread_pool.zig");
-    _ = @import("test/server.zig");
+    _ = @import("test/stream_server.zig");
+    _ = @import("test/dgram_server.zig");
 }
 
 test "Loop: empty run(.no_wait)" {
