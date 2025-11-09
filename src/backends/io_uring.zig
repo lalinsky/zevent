@@ -488,7 +488,11 @@ fn storeResult(self: *Self, c: *Completion, res: i32) void {
         .net_shutdown => {
             const data = c.cast(NetShutdown);
             if (res < 0) {
-                data.result = errnoToShutdownError(-res);
+                if (-res == ECANCELED) {
+                    data.result = error.Canceled;
+                } else {
+                    data.result = errnoToShutdownError(-res);
+                }
             } else {
                 data.result = {};
             }
