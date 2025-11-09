@@ -467,6 +467,10 @@ fn storeResult(self: *Self, c: *Completion, res: i32) void {
                 }
             } else {
                 data.result = @intCast(res);
+                // Propagate the peer address length filled in by the kernel
+                if (data.addr_len) |len_ptr| {
+                    len_ptr.* = c.internal.msg_recv.namelen;
+                }
             }
         },
         .net_sendto => {
