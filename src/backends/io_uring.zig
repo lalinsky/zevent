@@ -2,6 +2,7 @@ const std = @import("std");
 const linux = std.os.linux;
 const posix_os = @import("../os/posix.zig");
 const net = @import("../os/net.zig");
+const fs = @import("../os/fs.zig");
 const time = @import("../os/time.zig");
 const common = @import("common.zig");
 const LoopState = @import("../loop.zig").LoopState;
@@ -567,12 +568,7 @@ fn storeResult(self: *Self, c: *Completion, res: i32) void {
             const data = c.cast(FileOpen);
             self.allocator.free(data.internal.path);
             if (res < 0) {
-                if (-res == ECANCELED) {
-                    c.setError(error.Canceled);
-                } else {
-                    c.setError(error.Unexpected);
-                    // TODO c.setError(errnoToOpenError(-res));
-                }
+                c.setError(fs.errnoToFileOpenError(@enumFromInt(-res)));
             } else {
                 c.setResult(.file_open, res);
             }
@@ -580,12 +576,7 @@ fn storeResult(self: *Self, c: *Completion, res: i32) void {
 
         .file_close => {
             if (res < 0) {
-                if (-res == ECANCELED) {
-                    c.setError(error.Canceled);
-                } else {
-                    c.setError(error.Unexpected);
-                    // TODO c.setError(errnoToCloseError(-res));
-                }
+                c.setError(fs.errnoToFileCloseError(@enumFromInt(-res)));
             } else {
                 c.setResult(.file_close, {});
             }
@@ -593,27 +584,17 @@ fn storeResult(self: *Self, c: *Completion, res: i32) void {
 
         .file_read => {
             if (res < 0) {
-                if (-res == ECANCELED) {
-                    c.setError(error.Canceled);
-                } else {
-                    c.setError(error.Unexpected);
-                    // TODO c.setError(errnoToReadError(-res));
-                }
+                c.setError(fs.errnoToFileReadError(@enumFromInt(-res)));
             } else {
-                c.setResult(.file_read, @as(usize, @intCast(res)));
+                c.setResult(.file_read, @intCast(res));
             }
         },
 
         .file_write => {
             if (res < 0) {
-                if (-res == ECANCELED) {
-                    c.setError(error.Canceled);
-                } else {
-                    c.setError(error.Unexpected);
-                    // TODO c.setError(errnoToWriteError(-res));
-                }
+                c.setError(fs.errnoToFileWriteError(@enumFromInt(-res)));
             } else {
-                c.setResult(.file_write, @as(usize, @intCast(res)));
+                c.setResult(.file_write, @intCast(res));
             }
         },
     }
