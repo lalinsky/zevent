@@ -134,17 +134,28 @@ pub fn processCancellations(
 
         switch (target.state) {
             .new => {
-                // Not submitted yet - just mark as canceled
-                cancel_op.result = error.AlreadyCompleted;
-                state.markCompleted(cancel_c);
+                // UNREACHABLE: When cancel is added via loop.add() and target.state == .new,
+                // the cancel is not submitted to the queue (loop.add returns early).
+                // Therefore processCancellations never sees this case.
+                unreachable;
             },
             .adding => {
-                // In submission queue - can't cancel efficiently
-                cancel_op.result = error.AlreadyCompleted;
-                state.markCompleted(cancel_c);
+                // UNREACHABLE: When cancel is added via loop.add() and target.state == .adding,
+                // the cancel is not submitted to the queue (loop.add returns early).
+                // By the time processCancellations runs, processSubmissions has already
+                // transitioned all .adding operations to .running or .completed.
+                unreachable;
             },
             .running => {
-                // Submit cancel operation to io_uring
+                // Target is executing in io_uring. Submit a cancel SQE.
+                // This will generate TWO CQEs:
+                // 1. Cancel CQE (user_data=cancel_c, res=0 or -ENOENT)
+                // 2. Target CQE (user_data=target, res=-ECANCELED or success if cancel was too late)
+                //
+                // In tick(), we:
+                // - Skip cancel CQEs (they never complete the cancel directly)
+                // - Process target CQE and mark target complete
+                // - markCompleted(target) recursively completes the cancel via target.canceled link
                 const sqe = try self.ring.cancel(
                     @intFromPtr(cancel_c),
                     @intFromPtr(target),
@@ -154,7 +165,8 @@ pub fn processCancellations(
                 state.markRunning(cancel_c);
             },
             .completed => {
-                // Already completed
+                // Target already completed before cancel was processed.
+                // No CQEs will arrive. Complete cancel immediately.
                 cancel_op.result = error.AlreadyCompleted;
                 state.markCompleted(cancel_c);
             },
@@ -229,14 +241,11 @@ pub fn tick(self: *Self, state: *LoopState, timeout_ms: u64) !bool {
             continue;
         }
 
-        // For cancel operations: if the target is already completed, the target's
-        // completion already recursively completed us, so skip
+        // For cancel operations: NEVER complete the cancel directly from tick()
+        // The cancel should only be completed when the target completes (via markCompleted recursion)
+        // So we always skip cancel CQEs - either the target already completed it, or will complete it
         if (completion.op == .cancel) {
-            const cancel_op = completion.cast(Cancel);
-            if (cancel_op.cancel_c.state == .completed) {
-                // Target already completed and recursively completed this cancel
-                continue;
-            }
+            continue;
         }
 
         // Store the result in the completion
@@ -493,15 +502,7 @@ fn storeResult(self: *Self, c: *Completion, res: i32) void {
                 data.result = {};
             }
         },
-        .cancel => {
-            const data = c.cast(Cancel);
-            if (res < 0) {
-                // Cancel failed - operation probably already completed
-                data.result = error.AlreadyCompleted;
-            } else {
-                data.result = {};
-            }
-        },
+        // Cancel CQEs are always skipped in tick(), so cancel should never reach storeResult
         else => unreachable,
     }
 }
