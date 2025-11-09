@@ -12,19 +12,14 @@ const NetSend = @import("../completion.zig").NetSend;
 const NetClose = @import("../completion.zig").NetClose;
 const socket = @import("../os/posix/socket.zig");
 
-pub fn EchoServer(comptime domain: socket.Domain) type {
+pub fn EchoServer(comptime domain: socket.Domain, comptime sockaddr: type) type {
     return struct {
         state: State = .init,
         loop: *Loop,
 
         // Server socket
         server_sock: Backend.NetHandle = undefined,
-        server_addr: union {
-            in: socket.sockaddr.in,
-            in6: socket.sockaddr.in6,
-            un: socket.sockaddr.un,
-        },
-        server_addr_len: socket.socklen_t,
+        server_addr: sockaddr,
         bound_port: u16 = 0,
 
         // Client socket
@@ -69,48 +64,35 @@ pub fn EchoServer(comptime domain: socket.Domain) type {
             var self: Self = .{
                 .loop = loop,
                 .server_addr = undefined,
-                .server_addr_len = undefined,
                 .comp = .{ .none = {} },
             };
 
             switch (domain) {
                 .ipv4 => {
                     self.server_addr = .{
-                        .in = socket.sockaddr.in{
-                            .family = socket.AF.INET,
-                            .port = 0, // Let OS assign port
-                            .addr = @bitCast([4]u8{ 127, 0, 0, 1 }),
-                            .zero = [_]u8{0} ** 8,
-                        },
+                        .family = socket.AF.INET,
+                        .addr = @bitCast([4]u8{ 127, 0, 0, 1 }),
+                        .port = 0,
+                        .zero = [_]u8{0} ** 8,
                     };
-                    self.server_addr_len = @sizeOf(socket.sockaddr.in);
                 },
                 .ipv6 => {
                     self.server_addr = .{
-                        .in6 = socket.sockaddr.in6{
-                            .family = socket.AF.INET6,
-                            .port = 0,
-                            .flowinfo = 0,
-                            .addr = [_]u8{0} ** 15 ++ [_]u8{1}, // ::1
-                            .scope_id = 0,
-                        },
+                        .family = socket.AF.INET6,
+                        .addr = [_]u8{0} ** 15 ++ [_]u8{1},
+                        .port = 0,
+                        .flowinfo = 0,
+                        .scope_id = 0,
                     };
-                    self.server_addr_len = @sizeOf(socket.sockaddr.in6);
                 },
                 .unix => {
-                    // Generate unique path for Unix socket
+                    self.server_addr = .{
+                        .family = socket.AF.UNIX,
+                        .path = undefined,
+                    };
                     const pid = std.os.linux.getpid();
                     const timestamp = std.time.timestamp();
-                    var path_buf: [108]u8 = [_]u8{0} ** 108;
-                    const path = std.fmt.bufPrintZ(&path_buf, "/tmp/zevent-test-{d}-{d}.sock", .{ pid, timestamp }) catch unreachable;
-
-                    self.server_addr = .{
-                        .un = socket.sockaddr.un{
-                            .family = socket.AF.UNIX,
-                            .path = path_buf,
-                        },
-                    };
-                    self.server_addr_len = @intCast(@sizeOf(u16) + path.len + 1);
+                    _ = std.fmt.bufPrintZ(&self.server_addr.path, "/tmp/zevent-test-{d}-{d}.sock", .{ pid, timestamp }) catch unreachable;
                 },
             }
 
@@ -140,7 +122,7 @@ pub fn EchoServer(comptime domain: socket.Domain) type {
             self.comp = .{ .bind = NetBind.init(
                 self.server_sock,
                 @ptrCast(&self.server_addr),
-                self.server_addr_len,
+                @sizeOf(sockaddr),
             ) };
             self.comp.bind.c.callback = bindCallback;
             self.comp.bind.c.userdata = self;
@@ -293,19 +275,14 @@ pub fn EchoServer(comptime domain: socket.Domain) type {
     };
 }
 
-pub fn EchoClient(comptime domain: socket.Domain) type {
+pub fn EchoClient(comptime domain: socket.Domain, comptime sockaddr: type) type {
     return struct {
         state: State = .init,
         loop: *Loop,
 
         server_port_or_path: if (domain == .unix) []const u8 else u16,
         client_sock: Backend.NetHandle = undefined,
-        connect_addr: union {
-            in: socket.sockaddr.in,
-            in6: socket.sockaddr.in6,
-            un: socket.sockaddr.un,
-        },
-        connect_addr_len: socket.socklen_t,
+        connect_addr: sockaddr,
 
         // Union of completions - only one active at a time
         comp: union(enum) {
@@ -343,7 +320,6 @@ pub fn EchoClient(comptime domain: socket.Domain) type {
                 .send_buf = message,
                 .comp = undefined,
                 .connect_addr = undefined,
-                .connect_addr_len = undefined,
             };
 
             const protocol: socket.Protocol = if (domain == .unix) .default else .tcp;
@@ -373,43 +349,34 @@ pub fn EchoClient(comptime domain: socket.Domain) type {
             switch (domain) {
                 .ipv4 => {
                     self.connect_addr = .{
-                        .in = socket.sockaddr.in{
-                            .family = socket.AF.INET,
-                            .port = std.mem.nativeToBig(u16, self.server_port_or_path),
-                            .addr = @bitCast([4]u8{ 127, 0, 0, 1 }),
-                            .zero = [_]u8{0} ** 8,
-                        },
+                        .family = socket.AF.INET,
+                        .addr = @bitCast([4]u8{ 127, 0, 0, 1 }),
+                        .port = std.mem.nativeToBig(u16, self.server_port_or_path),
+                        .zero = [_]u8{0} ** 8,
                     };
-                    self.connect_addr_len = @sizeOf(socket.sockaddr.in);
                 },
                 .ipv6 => {
                     self.connect_addr = .{
-                        .in6 = socket.sockaddr.in6{
-                            .family = socket.AF.INET6,
-                            .port = std.mem.nativeToBig(u16, self.server_port_or_path),
-                            .flowinfo = 0,
-                            .addr = [_]u8{0} ** 15 ++ [_]u8{1}, // ::1
-                            .scope_id = 0,
-                        },
+                        .family = socket.AF.INET6,
+                        .addr = [_]u8{0} ** 15 ++ [_]u8{1}, // ::1
+                        .port = std.mem.nativeToBig(u16, self.server_port_or_path),
+                        .flowinfo = 0,
+                        .scope_id = 0,
                     };
-                    self.connect_addr_len = @sizeOf(socket.sockaddr.in6);
                 },
                 .unix => {
-                    var path_buf: [108]u8 = [_]u8{0} ** 108;
-                    @memcpy(path_buf[0..self.server_port_or_path.len], self.server_port_or_path);
                     self.connect_addr = .{
-                        .un = socket.sockaddr.un{
-                            .family = socket.AF.UNIX,
-                            .path = path_buf,
-                        },
+                        .family = socket.AF.UNIX,
+                        .path = undefined,
                     };
-                    self.connect_addr_len = @intCast(@sizeOf(u16) + self.server_port_or_path.len + 1);
+                    @memcpy(self.connect_addr.path[0..self.server_port_or_path.len], self.server_port_or_path);
+                    self.connect_addr.path[self.server_port_or_path.len] = 0;
                 },
             }
             self.comp = .{ .connect = NetConnect.init(
                 self.client_sock,
                 @ptrCast(&self.connect_addr),
-                self.connect_addr_len,
+                @sizeOf(sockaddr),
             ) };
             self.comp.connect.c.callback = connectCallback;
             self.comp.connect.c.userdata = self;
@@ -483,22 +450,19 @@ pub fn EchoClient(comptime domain: socket.Domain) type {
     };
 }
 
-fn testEcho(comptime domain: socket.Domain) !void {
+fn testEcho(comptime domain: socket.Domain, comptime sockaddr: type) !void {
     var loop: Loop = undefined;
     try loop.init(.{});
     defer loop.deinit();
 
-    const Server = EchoServer(domain);
-    const Client = EchoClient(domain);
+    const Server = EchoServer(domain, sockaddr);
+    const Client = EchoClient(domain, sockaddr);
 
     // Start server
     var server = Server.init(&loop);
     defer {
         if (domain == .unix) {
-            const path = switch (domain) {
-                .unix => server.server_addr.un.path[0..std.mem.indexOfScalar(u8, &server.server_addr.un.path, 0).?],
-                else => unreachable,
-            };
+            const path = std.mem.sliceTo(&server.server_addr.path, 0);
             std.fs.deleteFileAbsolute(path) catch {};
         }
     }
@@ -521,7 +485,7 @@ fn testEcho(comptime domain: socket.Domain) !void {
     // Start client
     const message = "Hello, Echo Server!";
     const port_or_path = if (domain == .unix)
-        server.server_addr.un.path[0..std.mem.indexOfScalar(u8, &server.server_addr.un.path, 0).?]
+        std.mem.sliceTo(&server.server_addr.path, 0)
     else
         server.bound_port;
     var client = Client.init(&loop, port_or_path, message);
@@ -538,13 +502,13 @@ fn testEcho(comptime domain: socket.Domain) !void {
 }
 
 test "Echo server and client - IPv4" {
-    try testEcho(.ipv4);
+    try testEcho(.ipv4, socket.sockaddr.in);
 }
 
 test "Echo server and client - IPv6" {
-    try testEcho(.ipv6);
+    try testEcho(.ipv6, socket.sockaddr.in6);
 }
 
 test "Echo server and client - Unix" {
-    try testEcho(.unix);
+    try testEcho(.unix, socket.sockaddr.un);
 }
