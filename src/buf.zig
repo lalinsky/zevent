@@ -15,7 +15,6 @@ pub const ReadBuf = extern struct {
         }
         return dest[0..len];
     }
-    }
 
     pub fn toIovecs(bufs: []const ReadBuf) []system.iovec {
         std.debug.assert(@alignOf(ReadBuf) == @alignOf(system.iovec));
@@ -35,8 +34,9 @@ pub const WriteBuf = extern struct {
 
     pub fn fromSlices(comptime n: usize, slices: [][]const u8) [n]WriteBuf {
         var bufs = [_]WriteBuf{undefined} ** n;
-        for (slices, 0..) |slice, i| {
-            bufs[i] = system.iovecConstFromSlice(slice);
+        const len = @min(slices.len, n);
+        for (0..len) |i| {
+            bufs[i] = WriteBuf.fromSlice(slices[i]);
         }
         return bufs;
     }
