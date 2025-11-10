@@ -51,6 +51,8 @@ pub const socklen_t = if (builtin.os.tag == .windows) i32 else posix.system.sock
 pub const SOL = posix.system.SOL;
 pub const SO = posix.system.SO;
 
+pub const E = if (builtin.os.tag == .windows) std.os.windows.ws2_32.WinsockError else posix.system.E;
+
 pub const iovec = @import("base.zig").iovec;
 pub const iovec_const = @import("base.zig").iovec_const;
 
@@ -143,6 +145,7 @@ pub const ShutdownHow = enum {
 pub const ShutdownError = error{
     NotConnected,
     NotSocket,
+    Canceled,
     Unexpected,
 };
 
@@ -157,11 +160,7 @@ pub fn shutdown(fd: fd_t, how: ShutdownHow) ShutdownError!void {
             const rc = std.os.windows.ws2_32.shutdown(fd, system_how);
             if (rc == std.os.windows.ws2_32.SOCKET_ERROR) {
                 const err = std.os.windows.ws2_32.WSAGetLastError();
-                return switch (err) {
-                    .WSAENOTCONN => error.NotConnected,
-                    .WSAENOTSOCK => error.NotSocket,
-                    else => unexpectedWSAError(err),
-                };
+                return errnoToShutdownError(err);
             }
         },
         else => {
@@ -175,11 +174,7 @@ pub fn shutdown(fd: fd_t, how: ShutdownHow) ShutdownError!void {
                 switch (posix.errno(rc)) {
                     .SUCCESS => return,
                     .INTR => continue,
-                    .BADF => unreachable, // sockfd is not a valid file descriptor - would be a bug
-                    .INVAL => unreachable, // Invalid value specified in how - would be a bug
-                    .NOTCONN => return error.NotConnected,
-                    .NOTSOCK => return error.NotSocket,
-                    else => |err| return posix.unexpectedErrno(err),
+                    else => |err| return errnoToShutdownError(err),
                 }
             }
         },
@@ -216,6 +211,7 @@ pub const OpenError = error{
     SystemFdQuotaExceeded,
     SystemResources,
     PermissionDenied,
+    Canceled,
     Unexpected,
 };
 
@@ -232,13 +228,7 @@ pub fn socket(domain: Domain, socket_type: Type, protocol: Protocol, flags: Open
             );
             if (sock == std.os.windows.ws2_32.INVALID_SOCKET) {
                 const err = std.os.windows.ws2_32.WSAGetLastError();
-                return switch (err) {
-                    .WSAEAFNOSUPPORT => error.AddressFamilyNotSupported,
-                    .WSAEPROTONOSUPPORT => error.ProtocolNotSupported,
-                    .WSAEMFILE => error.ProcessFdQuotaExceeded,
-                    .WSAENOBUFS => error.SystemResources,
-                    else => unexpectedWSAError(err),
-                };
+                return errnoToOpenError(err);
             }
             if (flags.nonblocking) {
                 var mode: c_ulong = 1;
@@ -282,14 +272,7 @@ pub fn socket(domain: Domain, socket_type: Type, protocol: Protocol, flags: Open
                         return fd;
                     },
                     .INTR => continue,
-                    .ACCES => return error.PermissionDenied,
-                    .AFNOSUPPORT => return error.AddressFamilyNotSupported,
-                    .INVAL => unreachable, // Invalid flags in type - we always pass valid flags
-                    .MFILE => return error.ProcessFdQuotaExceeded,
-                    .NFILE => return error.SystemFdQuotaExceeded,
-                    .NOBUFS, .NOMEM => return error.SystemResources,
-                    .PROTONOSUPPORT => return error.ProtocolNotSupported,
-                    else => |err| return posix.unexpectedErrno(err),
+                    else => |err| return errnoToOpenError(err),
                 }
             }
         },
@@ -400,6 +383,7 @@ pub const ConnectError = error{
     FileNotFound,
     PermissionDenied,
     NetworkUnreachable,
+    Canceled,
     Unexpected,
 };
 
@@ -409,19 +393,7 @@ pub fn connect(fd: fd_t, addr: *const sockaddr, addr_len: socklen_t) ConnectErro
             const rc = std.os.windows.ws2_32.connect(fd, @ptrCast(addr), @intCast(addr_len));
             if (rc == std.os.windows.ws2_32.SOCKET_ERROR) {
                 const err = std.os.windows.ws2_32.WSAGetLastError();
-                return switch (err) {
-                    .WSAEACCES => error.AccessDenied,
-                    .WSAEADDRINUSE => error.AddressInUse,
-                    .WSAEADDRNOTAVAIL => error.AddressNotAvailable,
-                    .WSAEAFNOSUPPORT => error.AddressFamilyNotSupported,
-                    .WSAEWOULDBLOCK => error.WouldBlock,
-                    .WSAEISCONN => error.AlreadyConnected,
-                    .WSAEALREADY => error.ConnectionPending,
-                    .WSAECONNREFUSED => error.ConnectionRefused,
-                    .WSAETIMEDOUT => error.ConnectionRefused,
-                    .WSAENETUNREACH => error.NetworkUnreachable,
-                    else => unexpectedWSAError(err),
-                };
+                return errnoToConnectError(err);
             }
         },
         else => {
@@ -430,22 +402,7 @@ pub fn connect(fd: fd_t, addr: *const sockaddr, addr_len: socklen_t) ConnectErro
                 switch (posix.errno(rc)) {
                     .SUCCESS => return,
                     .INTR => continue,
-                    .ACCES, .PERM => return error.PermissionDenied,
-                    .ADDRINUSE => return error.AddressInUse,
-                    .ADDRNOTAVAIL => return error.AddressNotAvailable,
-                    .AFNOSUPPORT => return error.AddressFamilyNotSupported,
-                    .AGAIN, .INPROGRESS => return error.WouldBlock,
-                    .ALREADY => return error.ConnectionPending,
-                    .BADF => unreachable, // sockfd is not a valid file descriptor - would be a bug
-                    .CONNREFUSED => return error.ConnectionRefused,
-                    .FAULT => unreachable, // Socket structure address outside user's address space - would be a bug
-                    .ISCONN => return error.AlreadyConnected,
-                    .NETUNREACH => return error.NetworkUnreachable,
-                    .NOTSOCK => unreachable, // sockfd doesn't refer to a socket - would be a bug
-                    .PROTOTYPE => unreachable, // Socket type doesn't support requested protocol - would be a bug
-                    .TIMEDOUT => return error.ConnectionRefused,
-                    .NOENT => return error.FileNotFound,
-                    else => |err| return posix.unexpectedErrno(err),
+                    else => |err| return errnoToConnectError(err),
                 }
             }
         },
@@ -461,6 +418,7 @@ pub const AcceptError = error{
     PermissionDenied,
     ProtocolFailure,
     BlockedByFirewall,
+    Canceled,
     Unexpected,
 };
 
@@ -474,13 +432,7 @@ pub fn accept(fd: fd_t, addr: ?*sockaddr, addr_len: ?*socklen_t, flags: OpenFlag
             );
             if (sock == std.os.windows.ws2_32.INVALID_SOCKET) {
                 const err = std.os.windows.ws2_32.WSAGetLastError();
-                return switch (err) {
-                    .WSAEWOULDBLOCK => error.WouldBlock,
-                    .WSAECONNABORTED => error.ConnectionAborted,
-                    .WSAEMFILE => error.ProcessFdQuotaExceeded,
-                    .WSAENOBUFS => error.SystemResources,
-                    else => unexpectedWSAError(err),
-                };
+                return errnoToAcceptError(err);
             }
             if (flags.nonblocking) {
                 var mode: c_ulong = 1;
@@ -537,19 +489,7 @@ pub fn accept(fd: fd_t, addr: ?*sockaddr, addr_len: ?*socklen_t, flags: OpenFlag
                         return sock;
                     },
                     .INTR => continue,
-                    .AGAIN => return error.WouldBlock,
-                    .BADF => unreachable, // sockfd is not a valid file descriptor - would be a bug
-                    .CONNABORTED => return error.ConnectionAborted,
-                    .FAULT => unreachable, // addr argument not in writable part of address space - would be a bug
-                    .INVAL => unreachable, // Socket not listening, invalid addrlen, or invalid flags - would be a bug
-                    .MFILE => return error.ProcessFdQuotaExceeded,
-                    .NFILE => return error.SystemFdQuotaExceeded,
-                    .NOBUFS, .NOMEM => return error.SystemResources,
-                    .NOTSOCK => unreachable, // sockfd doesn't refer to a socket - would be a bug
-                    .OPNOTSUPP => unreachable, // Socket is not SOCK_STREAM - would be a bug
-                    .PERM => return error.PermissionDenied,
-                    .PROTO => return error.ProtocolFailure,
-                    else => |err| return posix.unexpectedErrno(err),
+                    else => |err| return errnoToAcceptError(err),
                 }
             }
         },
@@ -600,11 +540,10 @@ pub fn getSockError(fd: fd_t) GetSockErrorError!i32 {
     }
 }
 
-pub fn errnoToConnectError(err: i32) ConnectError {
+pub fn errnoToConnectError(err: E) ConnectError {
     switch (builtin.os.tag) {
         .windows => {
-            const wsa_err: std.os.windows.ws2_32.WinsockError = @enumFromInt(@as(u16, @intCast(err)));
-            return switch (wsa_err) {
+            return switch (err) {
                 .WSAECONNREFUSED => error.ConnectionRefused,
                 .WSAEHOSTUNREACH, .WSAENETUNREACH => error.NetworkUnreachable,
                 .WSAEACCES => error.AccessDenied,
@@ -613,12 +552,14 @@ pub fn errnoToConnectError(err: i32) ConnectError {
                 .WSAEAFNOSUPPORT => error.AddressFamilyNotSupported,
                 .WSAEISCONN => error.AlreadyConnected,
                 .WSAEALREADY => error.ConnectionPending,
-                else => unexpectedWSAError(wsa_err),
+                .WSAEWOULDBLOCK => error.WouldBlock,
+                .WSA_OPERATION_ABORTED => error.Canceled,
+                else => unexpectedWSAError(err),
             };
         },
         else => {
-            const errno_val: posix.system.E = @enumFromInt(err);
-            return switch (errno_val) {
+            return switch (err) {
+                .SUCCESS => unreachable,
                 .CONNREFUSED => error.ConnectionRefused,
                 .HOSTUNREACH, .NETUNREACH => error.NetworkUnreachable,
                 .ACCES, .PERM => error.AccessDenied,
@@ -626,77 +567,138 @@ pub fn errnoToConnectError(err: i32) ConnectError {
                 .ADDRNOTAVAIL => error.AddressNotAvailable,
                 .AFNOSUPPORT => error.AddressFamilyNotSupported,
                 .ISCONN => error.AlreadyConnected,
-                .ALREADY => error.ConnectionPending,
-                else => posix.unexpectedErrno(errno_val),
+                .ALREADY, .INPROGRESS => error.ConnectionPending,
+                .AGAIN => error.WouldBlock,
+                .CANCELED => error.Canceled,
+                else => |e| posix.unexpectedErrno(e),
             };
         },
     }
 }
 
-pub fn errnoToAcceptError(err: i32) AcceptError {
+pub fn errnoToAcceptError(err: E) AcceptError {
     switch (builtin.os.tag) {
         .windows => {
-            const wsa_err: std.os.windows.ws2_32.WinsockError = @enumFromInt(@as(u16, @intCast(err)));
-            return switch (wsa_err) {
+            return switch (err) {
                 .WSAECONNABORTED => error.ConnectionAborted,
                 .WSAEACCES => error.PermissionDenied,
                 .WSAEPROTONOSUPPORT => error.ProtocolFailure,
-                else => unexpectedWSAError(wsa_err),
+                .WSAEWOULDBLOCK => error.WouldBlock,
+                .WSA_OPERATION_ABORTED => error.Canceled,
+                else => unexpectedWSAError(err),
             };
         },
         else => {
-            const errno_val: posix.system.E = @enumFromInt(err);
-            return switch (errno_val) {
+            return switch (err) {
+                .SUCCESS => unreachable,
                 .CONNABORTED => error.ConnectionAborted,
                 .ACCES, .PERM => error.PermissionDenied,
                 .PROTO => error.ProtocolFailure,
-                else => posix.unexpectedErrno(errno_val),
+                .AGAIN => error.WouldBlock,
+                .CANCELED => error.Canceled,
+                else => |e| posix.unexpectedErrno(e),
             };
         },
     }
 }
 
-pub fn errnoToRecvError(err: i32) RecvError {
+pub fn errnoToRecvError(err: E) RecvError {
     switch (builtin.os.tag) {
         .windows => {
-            const wsa_err: std.os.windows.ws2_32.WinsockError = @enumFromInt(@as(u16, @intCast(err)));
-            return switch (wsa_err) {
+            return switch (err) {
                 .WSAECONNRESET, .WSAENETRESET => error.ConnectionResetByPeer,
                 .WSAECONNREFUSED => error.ConnectionRefused,
-                else => unexpectedWSAError(wsa_err),
+                .WSAEWOULDBLOCK => error.WouldBlock,
+                .WSA_OPERATION_ABORTED => error.Canceled,
+                else => unexpectedWSAError(err),
             };
         },
         else => {
-            const errno_val: posix.system.E = @enumFromInt(err);
-            return switch (errno_val) {
+            return switch (err) {
+                .SUCCESS => unreachable,
                 .CONNRESET => error.ConnectionResetByPeer,
                 .CONNREFUSED => error.ConnectionRefused,
-                else => posix.unexpectedErrno(errno_val),
+                .AGAIN => error.WouldBlock,
+                .CANCELED => error.Canceled,
+                else => |e| posix.unexpectedErrno(e),
             };
         },
     }
 }
 
-pub fn errnoToSendError(err: i32) SendError {
+pub fn errnoToSendError(err: E) SendError {
     switch (builtin.os.tag) {
         .windows => {
-            const wsa_err: std.os.windows.ws2_32.WinsockError = @enumFromInt(@as(u16, @intCast(err)));
-            return switch (wsa_err) {
+            return switch (err) {
                 .WSAECONNRESET, .WSAENETRESET => error.ConnectionResetByPeer,
                 .WSAESHUTDOWN => error.BrokenPipe,
                 .WSAEACCES => error.AccessDenied,
                 .WSAEMSGSIZE => error.MessageTooBig,
-                else => unexpectedWSAError(wsa_err),
+                .WSAEWOULDBLOCK => error.WouldBlock,
+                .WSA_OPERATION_ABORTED => error.Canceled,
+                else => unexpectedWSAError(err),
             };
         },
         else => {
-            const errno_val: posix.system.E = @enumFromInt(err);
-            return switch (errno_val) {
+            return switch (err) {
+                .SUCCESS => unreachable,
                 .CONNRESET => error.ConnectionResetByPeer,
                 .PIPE => error.BrokenPipe,
                 .ACCES => error.AccessDenied,
                 .MSGSIZE => error.MessageTooBig,
-                else => posix.unexpectedErrno(errno_val),
+                .AGAIN => error.WouldBlock,
+                .CANCELED => error.Canceled,
+                else => |e| posix.unexpectedErrno(e),
+            };
+        },
+    }
+}
+
+pub fn errnoToShutdownError(err: E) ShutdownError {
+    switch (builtin.os.tag) {
+        .windows => {
+            return switch (err) {
+                .WSAENOTCONN => error.NotConnected,
+                .WSAENOTSOCK => error.NotSocket,
+                .WSA_OPERATION_ABORTED => error.Canceled,
+                else => unexpectedWSAError(err),
+            };
+        },
+        else => {
+            return switch (err) {
+                .SUCCESS => unreachable,
+                .NOTCONN => error.NotConnected,
+                .NOTSOCK => error.NotSocket,
+                .CANCELED => error.Canceled,
+                else => |e| posix.unexpectedErrno(e),
+            };
+        },
+    }
+}
+
+pub fn errnoToOpenError(err: E) OpenError {
+    switch (builtin.os.tag) {
+        .windows => {
+            return switch (err) {
+                .WSAEAFNOSUPPORT => error.AddressFamilyNotSupported,
+                .WSAEPROTONOSUPPORT => error.ProtocolNotSupported,
+                .WSAEMFILE => error.ProcessFdQuotaExceeded,
+                .WSAENOBUFS => error.SystemResources,
+                .WSA_OPERATION_ABORTED => error.Canceled,
+                else => unexpectedWSAError(err),
+            };
+        },
+        else => {
+            return switch (err) {
+                .SUCCESS => unreachable,
+                .ACCES => error.PermissionDenied,
+                .AFNOSUPPORT => error.AddressFamilyNotSupported,
+                .MFILE => error.ProcessFdQuotaExceeded,
+                .NFILE => error.SystemFdQuotaExceeded,
+                .NOBUFS, .NOMEM => error.SystemResources,
+                .PROTONOSUPPORT => error.ProtocolNotSupported,
+                .CANCELED => error.Canceled,
+                else => |e| posix.unexpectedErrno(e),
             };
         },
     }
@@ -712,6 +714,7 @@ pub const RecvError = error{
     ConnectionRefused,
     ConnectionResetByPeer,
     SystemResources,
+    Canceled,
     Unexpected,
 };
 
@@ -737,12 +740,7 @@ pub fn recv(fd: fd_t, buffers: []iovec, flags: RecvFlags) RecvError!usize {
             );
             if (rc == std.os.windows.ws2_32.SOCKET_ERROR) {
                 const err = std.os.windows.ws2_32.WSAGetLastError();
-                return switch (err) {
-                    .WSAEWOULDBLOCK => error.WouldBlock,
-                    .WSAECONNREFUSED => error.ConnectionRefused,
-                    .WSAECONNRESET => error.ConnectionResetByPeer,
-                    else => unexpectedWSAError(err),
-                };
+                return errnoToRecvError(err);
             }
             return bytes_received;
         },
@@ -761,16 +759,7 @@ pub fn recv(fd: fd_t, buffers: []iovec, flags: RecvFlags) RecvError!usize {
                     }
                     switch (posix.errno(rc)) {
                         .INTR => continue,
-                        .AGAIN => return error.WouldBlock,
-                        .BADF => unreachable,
-                        .CONNREFUSED => return error.ConnectionRefused,
-                        .FAULT => unreachable,
-                        .INVAL => unreachable,
-                        .NOMEM => return error.SystemResources,
-                        .NOTCONN => unreachable,
-                        .NOTSOCK => unreachable,
-                        .CONNRESET => return error.ConnectionResetByPeer,
-                        else => |err| return posix.unexpectedErrno(err),
+                        else => |err| return errnoToRecvError(err),
                     }
                 }
             } else {
@@ -793,16 +782,7 @@ pub fn recv(fd: fd_t, buffers: []iovec, flags: RecvFlags) RecvError!usize {
                     }
                     switch (posix.errno(rc)) {
                         .INTR => continue,
-                        .AGAIN => return error.WouldBlock,
-                        .BADF => unreachable,
-                        .CONNREFUSED => return error.ConnectionRefused,
-                        .FAULT => unreachable,
-                        .INVAL => unreachable,
-                        .NOMEM => return error.SystemResources,
-                        .NOTCONN => unreachable,
-                        .NOTSOCK => unreachable,
-                        .CONNRESET => return error.ConnectionResetByPeer,
-                        else => |err| return posix.unexpectedErrno(err),
+                        else => |err| return errnoToRecvError(err),
                     }
                 }
             }
@@ -821,6 +801,7 @@ pub const SendError = error{
     MessageTooBig,
     BrokenPipe,
     SystemResources,
+    Canceled,
     Unexpected,
 };
 
@@ -846,13 +827,7 @@ pub fn send(fd: fd_t, buffers: []const iovec_const, flags: SendFlags) SendError!
             );
             if (rc == std.os.windows.ws2_32.SOCKET_ERROR) {
                 const err = std.os.windows.ws2_32.WSAGetLastError();
-                return switch (err) {
-                    .WSAEWOULDBLOCK => error.WouldBlock,
-                    .WSAEACCES => error.AccessDenied,
-                    .WSAECONNRESET => error.ConnectionResetByPeer,
-                    .WSAEMSGSIZE => error.MessageTooBig,
-                    else => unexpectedWSAError(err),
-                };
+                return errnoToSendError(err);
             }
             return bytes_sent;
         },
@@ -871,23 +846,7 @@ pub fn send(fd: fd_t, buffers: []const iovec_const, flags: SendFlags) SendError!
                     }
                     switch (posix.errno(rc)) {
                         .INTR => continue,
-                        .AGAIN => return error.WouldBlock,
-                        .ACCES => return error.AccessDenied,
-                        .ALREADY => unreachable,
-                        .BADF => unreachable,
-                        .CONNRESET => return error.ConnectionResetByPeer,
-                        .DESTADDRREQ => unreachable,
-                        .FAULT => unreachable,
-                        .INVAL => unreachable,
-                        .ISCONN => unreachable,
-                        .MSGSIZE => return error.MessageTooBig,
-                        .NOBUFS => return error.SystemResources,
-                        .NOMEM => return error.SystemResources,
-                        .NOTCONN => unreachable,
-                        .NOTSOCK => unreachable,
-                        .OPNOTSUPP => unreachable,
-                        .PIPE => return error.BrokenPipe,
-                        else => |err| return posix.unexpectedErrno(err),
+                        else => |err| return errnoToSendError(err),
                     }
                 }
             } else {
@@ -910,23 +869,7 @@ pub fn send(fd: fd_t, buffers: []const iovec_const, flags: SendFlags) SendError!
                     }
                     switch (posix.errno(rc)) {
                         .INTR => continue,
-                        .AGAIN => return error.WouldBlock,
-                        .ACCES => return error.AccessDenied,
-                        .ALREADY => unreachable,
-                        .BADF => unreachable,
-                        .CONNRESET => return error.ConnectionResetByPeer,
-                        .DESTADDRREQ => unreachable,
-                        .FAULT => unreachable,
-                        .INVAL => unreachable,
-                        .ISCONN => unreachable,
-                        .MSGSIZE => return error.MessageTooBig,
-                        .NOBUFS => return error.SystemResources,
-                        .NOMEM => return error.SystemResources,
-                        .NOTCONN => unreachable,
-                        .NOTSOCK => unreachable,
-                        .OPNOTSUPP => unreachable,
-                        .PIPE => return error.BrokenPipe,
-                        else => |err| return posix.unexpectedErrno(err),
+                        else => |err| return errnoToSendError(err),
                     }
                 }
             }
@@ -975,12 +918,7 @@ pub fn recvfrom(
             if (addr_len) |len| len.* = @intCast(from_len);
             if (rc == std.os.windows.ws2_32.SOCKET_ERROR) {
                 const err = std.os.windows.ws2_32.WSAGetLastError();
-                return switch (err) {
-                    .WSAEWOULDBLOCK => error.WouldBlock,
-                    .WSAECONNREFUSED => error.ConnectionRefused,
-                    .WSAECONNRESET => error.ConnectionResetByPeer,
-                    else => unexpectedWSAError(err),
-                };
+                return errnoToRecvError(err);
             }
             return bytes_received;
         },
@@ -1003,16 +941,7 @@ pub fn recvfrom(
                     }
                     switch (posix.errno(rc)) {
                         .INTR => continue,
-                        .AGAIN => return error.WouldBlock,
-                        .BADF => unreachable,
-                        .CONNREFUSED => return error.ConnectionRefused,
-                        .FAULT => unreachable,
-                        .INVAL => unreachable,
-                        .NOMEM => return error.SystemResources,
-                        .NOTCONN => unreachable,
-                        .NOTSOCK => unreachable,
-                        .CONNRESET => return error.ConnectionResetByPeer,
-                        else => |err| return posix.unexpectedErrno(err),
+                        else => |err| return errnoToRecvError(err),
                     }
                 }
             } else {
@@ -1036,16 +965,7 @@ pub fn recvfrom(
                     }
                     switch (posix.errno(rc)) {
                         .INTR => continue,
-                        .AGAIN => return error.WouldBlock,
-                        .BADF => unreachable,
-                        .CONNREFUSED => return error.ConnectionRefused,
-                        .FAULT => unreachable,
-                        .INVAL => unreachable,
-                        .NOMEM => return error.SystemResources,
-                        .NOTCONN => unreachable,
-                        .NOTSOCK => unreachable,
-                        .CONNRESET => return error.ConnectionResetByPeer,
-                        else => |err| return posix.unexpectedErrno(err),
+                        else => |err| return errnoToRecvError(err),
                     }
                 }
             }
@@ -1083,13 +1003,7 @@ pub fn sendto(
             );
             if (rc == std.os.windows.ws2_32.SOCKET_ERROR) {
                 const err = std.os.windows.ws2_32.WSAGetLastError();
-                return switch (err) {
-                    .WSAEWOULDBLOCK => error.WouldBlock,
-                    .WSAEACCES => error.AccessDenied,
-                    .WSAECONNRESET => error.ConnectionResetByPeer,
-                    .WSAEMSGSIZE => error.MessageTooBig,
-                    else => unexpectedWSAError(err),
-                };
+                return errnoToSendError(err);
             }
             return bytes_sent;
         },
@@ -1112,23 +1026,7 @@ pub fn sendto(
                     }
                     switch (posix.errno(rc)) {
                         .INTR => continue,
-                        .AGAIN => return error.WouldBlock,
-                        .ACCES => return error.AccessDenied,
-                        .ALREADY => unreachable,
-                        .BADF => unreachable,
-                        .CONNRESET => return error.ConnectionResetByPeer,
-                        .DESTADDRREQ => unreachable,
-                        .FAULT => unreachable,
-                        .INVAL => unreachable,
-                        .ISCONN => unreachable,
-                        .MSGSIZE => return error.MessageTooBig,
-                        .NOBUFS => return error.SystemResources,
-                        .NOMEM => return error.SystemResources,
-                        .NOTCONN => unreachable,
-                        .NOTSOCK => unreachable,
-                        .OPNOTSUPP => unreachable,
-                        .PIPE => return error.BrokenPipe,
-                        else => |err| return posix.unexpectedErrno(err),
+                        else => |err| return errnoToSendError(err),
                     }
                 }
             } else {
@@ -1151,23 +1049,7 @@ pub fn sendto(
                     }
                     switch (posix.errno(rc)) {
                         .INTR => continue,
-                        .AGAIN => return error.WouldBlock,
-                        .ACCES => return error.AccessDenied,
-                        .ALREADY => unreachable,
-                        .BADF => unreachable,
-                        .CONNRESET => return error.ConnectionResetByPeer,
-                        .DESTADDRREQ => unreachable,
-                        .FAULT => unreachable,
-                        .INVAL => unreachable,
-                        .ISCONN => unreachable,
-                        .MSGSIZE => return error.MessageTooBig,
-                        .NOBUFS => return error.SystemResources,
-                        .NOMEM => return error.SystemResources,
-                        .NOTCONN => unreachable,
-                        .NOTSOCK => unreachable,
-                        .OPNOTSUPP => unreachable,
-                        .PIPE => return error.BrokenPipe,
-                        else => |err| return posix.unexpectedErrno(err),
+                        else => |err| return errnoToSendError(err),
                     }
                 }
             }
