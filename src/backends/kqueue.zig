@@ -101,31 +101,45 @@ fn getFilter(op: OperationType) i16 {
     };
 }
 
-/// Queue a kevent change to register a completion
-fn queueRegister(self: *Self, fd: NetHandle, completion: *Completion) !void {
+/// Queue a kevent change to register a completion.
+/// If queuing fails, completes the completion with error.Unexpected.
+fn queueRegister(self: *Self, state: *LoopState, fd: NetHandle, completion: *Completion) void {
     const filter = getFilter(completion.op);
-    try self.change_buffer.append(self.allocator, .{
+    self.change_buffer.append(self.allocator, .{
         .ident = @intCast(fd),
         .filter = filter,
         .flags = c.EV.ADD | c.EV.ENABLE | c.EV.ONESHOT,
         .fflags = 0,
         .data = 0,
         .udata = @intFromPtr(completion),
-    });
+    }) catch {
+        log.err("Failed to queue kevent register: OutOfMemory", .{});
+        completion.setError(error.Unexpected);
+        state.markCompleted(completion);
+        return;
+    };
+
+    // Operation is now pending flush
+    completion.state = .pending;
 }
 
-/// Queue a kevent change to unregister a completion
+/// Queue a kevent change to unregister a completion.
 /// NOTE: Only used for cancellations; normal completions use EV_ONESHOT which auto-removes events
-fn queueUnregister(self: *Self, fd: NetHandle, completion: *Completion) !void {
+/// Returns true if successfully queued, false if OOM (caller should let target complete naturally)
+fn queueUnregister(self: *Self, fd: NetHandle, completion: *Completion) bool {
     const filter = getFilter(completion.op);
-    try self.change_buffer.append(self.allocator, .{
+    self.change_buffer.append(self.allocator, .{
         .ident = @intCast(fd),
         .filter = filter,
         .flags = c.EV.DELETE,
         .fflags = 0,
         .data = 0,
         .udata = @intFromPtr(completion),
-    });
+    }) catch {
+        log.err("Failed to queue kevent unregister: OutOfMemory", .{});
+        return false;
+    };
+    return true;
 }
 
 /// Submit all queued kevent changes in batches
@@ -161,32 +175,111 @@ fn getHandle(completion: *Completion) NetHandle {
     };
 }
 
-pub fn processSubmissions(self: *Self, state: *LoopState, submissions: *Queue(Completion)) !void {
-    while (submissions.pop()) |completion| {
-        switch (try self.startCompletion(completion)) {
-            .completed => state.markCompleted(completion),
-            .running => state.markRunning(completion),
-        }
-    }
+/// Submit a completion to the backend - infallible.
+/// On error, completes the operation immediately with error.Unexpected.
+pub fn submit(self: *Self, state: *LoopState, c: *Completion) void {
+    c.state = .running;
+    state.active += 1;
 
-    // Submit all queued changes in batches (non-blocking)
-    try self.submitChanges();
+    switch (c.op) {
+        .timer, .async, .work => unreachable, // Managed by the loop
+        .cancel => unreachable, // Handled separately via cancel() method
+
+        // Synchronous operations - complete immediately
+        .net_open => {
+            common.handleNetOpen(c);
+            state.markCompleted(c);
+        },
+        .net_bind => {
+            common.handleNetBind(c);
+            state.markCompleted(c);
+        },
+        .net_listen => {
+            common.handleNetListen(c);
+            state.markCompleted(c);
+        },
+        .net_close => {
+            common.handleNetClose(c);
+            state.markCompleted(c);
+        },
+        .net_shutdown => {
+            common.handleNetShutdown(c);
+            state.markCompleted(c);
+        },
+
+        // Connect - must call connect() first
+        .net_connect => {
+            const data = c.cast(NetConnect);
+            if (net.connect(data.handle, data.addr, data.addr_len)) |_| {
+                // Connected immediately (e.g., localhost)
+                c.setResult(.net_connect, {});
+                state.markCompleted(c);
+            } else |err| switch (err) {
+                error.WouldBlock, error.ConnectionPending => {
+                    // Queue for completion - queueRegister handles errors and sets .pending state
+                    self.queueRegister(state, data.handle, c);
+                },
+                else => {
+                    c.setError(err);
+                    state.markCompleted(c);
+                },
+            }
+        },
+
+        // Other async operations - queue and try on wakeup
+        .net_accept => {
+            const data = c.cast(NetAccept);
+            self.queueRegister(state, data.handle, c);
+        },
+        .net_recv => {
+            const data = c.cast(NetRecv);
+            self.queueRegister(state, data.handle, c);
+        },
+        .net_send => {
+            const data = c.cast(NetSend);
+            self.queueRegister(state, data.handle, c);
+        },
+        .net_recvfrom => {
+            const data = c.cast(NetRecvFrom);
+            self.queueRegister(state, data.handle, c);
+        },
+        .net_sendto => {
+            const data = c.cast(NetSendTo);
+            self.queueRegister(state, data.handle, c);
+        },
+
+        // File operations are handled by Loop via thread pool
+        .file_open, .file_close, .file_read, .file_write => unreachable,
+    }
 }
 
-pub fn processCancellations(self: *Self, state: *LoopState, cancels: *Queue(Completion)) !void {
-    while (cancels.pop()) |completion| {
-        if (completion.state == .completed) continue;
-        const cancel = completion.cast(Cancel);
+/// Cancel a completion - infallible.
+/// Note: target.canceled is already set by loop.add() before this is called.
+pub fn cancel(self: *Self, state: *LoopState, c: *Completion) void {
+    // Mark cancel operation as running
+    c.state = .running;
+    state.active += 1;
 
-        const fd = getHandle(cancel.cancel_c);
-        try self.queueUnregister(fd, cancel.cancel_c);
+    const cancel_data = c.cast(Cancel);
+    const target = cancel_data.cancel_c;
 
-        completion.setResult(.cancel, {});
-        cancel.cancel_c.setError(error.Canceled);
-        state.markCompleted(cancel.cancel_c);
+    // Try to queue unregister
+    const fd = getHandle(target);
+    if (!self.queueUnregister(fd, target)) {
+        // Queueing failed - target is still registered with target.canceled set
+        // When target completes, markCompleted(target) will recursively complete cancel
+        return; // Do nothing, let target complete naturally
     }
 
-    // Submit all queued changes in batches (non-blocking)
+    // Successfully queued - target will be unregistered on flush
+    // Complete target with error.Canceled immediately
+    // markCompleted(target) will recursively complete the cancel operation
+    target.setError(error.Canceled);
+    state.markCompleted(target);
+}
+
+/// Flush any pending operations to the kernel.
+pub fn flush(self: *Self) !void {
     try self.submitChanges();
 }
 
@@ -233,7 +326,7 @@ pub fn tick(self: *Self, state: *LoopState, timeout_ms: u64) !bool {
             },
             .requeue => {
                 // Spurious wakeup - EV_ONESHOT already consumed the event, re-register
-                try self.queueRegister(fd, completion);
+                self.queueRegister(state, fd, completion);
             },
         }
     }
@@ -242,83 +335,6 @@ pub fn tick(self: *Self, state: *LoopState, timeout_ms: u64) !bool {
     try self.submitChanges();
 
     return false; // Did not timeout, woke up due to events
-}
-
-pub fn startCompletion(self: *Self, comp: *Completion) !enum { completed, running } {
-    switch (comp.op) {
-        .timer, .async, .work => unreachable, // Manged by the loop
-        .cancel => return .running, // Cancel was marked by loop and waits until the target completes
-
-        // Synchronous operations - complete immediately
-        .net_open => {
-            common.handleNetOpen(comp);
-            return .completed;
-        },
-        .net_bind => {
-            common.handleNetBind(comp);
-            return .completed;
-        },
-        .net_listen => {
-            common.handleNetListen(comp);
-            return .completed;
-        },
-        .net_close => {
-            common.handleNetClose(comp);
-            return .completed;
-        },
-        .net_shutdown => {
-            common.handleNetShutdown(comp);
-            return .completed;
-        },
-
-        // Potentially async operations - try first, register if WouldBlock
-        .net_connect => {
-            const data = comp.cast(NetConnect);
-            if (net.connect(data.handle, data.addr, data.addr_len)) |_| {
-                // Connected immediately (e.g., localhost)
-                comp.setResult(.net_connect, {});
-                return .completed;
-            } else |err| switch (err) {
-                error.WouldBlock, error.ConnectionPending => {
-                    // Queue for EVFILT_WRITE to detect when connection completes
-                    try self.queueRegister(data.handle, comp);
-                    return .running;
-                },
-                else => {
-                    comp.setError(err);
-                    return .completed;
-                },
-            }
-        },
-        .net_accept => {
-            const data = comp.cast(NetAccept);
-            try self.queueRegister(data.handle, comp);
-            return .running;
-        },
-        .net_recv => {
-            const data = comp.cast(NetRecv);
-            try self.queueRegister(data.handle, comp);
-            return .running;
-        },
-        .net_send => {
-            const data = comp.cast(NetSend);
-            try self.queueRegister(data.handle, comp);
-            return .running;
-        },
-        .net_recvfrom => {
-            const data = comp.cast(NetRecvFrom);
-            try self.queueRegister(data.handle, comp);
-            return .running;
-        },
-        .net_sendto => {
-            const data = comp.cast(NetSendTo);
-            try self.queueRegister(data.handle, comp);
-            return .running;
-        },
-
-        // File operations are handled by Loop via thread pool
-        .file_open, .file_close, .file_read, .file_write => unreachable,
-    }
 }
 
 const CheckResult = enum { completed, requeue };
@@ -338,15 +354,6 @@ fn handleKqueueError(event: *const c.Kevent, comptime errnoToError: fn (i32) any
     const sock_err = net.getSockError(@intCast(event.ident)) catch return error.Unexpected;
     if (sock_err == 0) return null; // No actual error, caller should retry operation
     return errnoToError(sock_err);
-}
-
-fn checkSpuriousWakeup(result: anytype) CheckResult {
-    if (result) |_| {
-        return .completed;
-    } else |err| switch (err) {
-        error.WouldBlock => return .requeue,
-        else => return .completed,
-    }
 }
 
 pub fn checkCompletion(comp: *Completion, event: *const c.Kevent) CheckResult {
