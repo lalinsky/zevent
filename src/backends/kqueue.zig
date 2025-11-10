@@ -117,9 +117,6 @@ fn queueRegister(self: *Self, state: *LoopState, fd: NetHandle, completion: *Com
         state.markCompleted(completion);
         return;
     };
-
-    // Operation is now pending flush
-    completion.state = .pending;
 }
 
 /// Queue a kevent change to unregister a completion.
