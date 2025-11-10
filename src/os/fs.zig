@@ -155,7 +155,7 @@ pub fn openat(allocator: std.mem.Allocator, dir: fd_t, path: []const u8, flags: 
     defer allocator.free(path_z);
 
     while (true) {
-        const rc = posix.system.openat(dir, path_z.ptr, open_flags, 0);
+        const rc = posix.system.openat(dir, path_z.ptr, open_flags, @as(mode_t, 0));
         switch (posix.errno(rc)) {
             .SUCCESS => return @intCast(rc),
             .INTR => continue,
