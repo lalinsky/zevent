@@ -415,7 +415,8 @@ pub fn checkCompletion(c: *Completion, item: *const net.pollfd) CheckResult {
                 c.setError(err);
                 return .completed;
             }
-            if (net.recv(data.handle, data.buffers, data.flags)) |n| {
+            const iov = ReadBuf.toIovecs(data.buffers);
+            if (net.recv(data.handle, iov, data.flags)) |n| {
                 c.setResult(.net_recv, n);
                 return .completed;
             } else |err| switch (err) {
