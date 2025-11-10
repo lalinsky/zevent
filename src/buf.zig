@@ -10,10 +10,11 @@ pub const ReadBuf = extern struct {
 
     pub fn fromSlices(src: [][]u8, dest: []ReadBuf) []ReadBuf {
         const len = @min(src.len, dest.len);
-        for (src, 0..) |slice, i| {
-            dest[i] = system.iovecFromSlice(slice);
+        for (0..len) |i| {
+            dest[i] = ReadBuf.fromSlice(src[i]);
         }
         return dest[0..len];
+    }
     }
 
     pub fn toIovecs(bufs: []const ReadBuf) []system.iovec {
