@@ -81,7 +81,7 @@ pub fn handleFileOpen(c: *Completion, allocator: std.mem.Allocator) void {
 /// Helper to handle file create operation
 pub fn handleFileCreate(c: *Completion, allocator: std.mem.Allocator) void {
     const data = c.cast(FileCreate);
-    if (fs.createat(allocator, data.dir, data.path, data.mode, data.flags)) |fd| {
+    if (fs.createat(allocator, data.dir, data.path, data.flags)) |fd| {
         c.setResult(.file_create, fd);
     } else |err| {
         c.setError(err);

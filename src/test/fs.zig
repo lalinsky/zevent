@@ -13,7 +13,7 @@ test "File: open/close" {
 
     const cwd = std.fs.cwd();
 
-    var file_create = aio.FileCreate.init(cwd.fd, "test-file", 0o664, .{ .read = true, .truncate = true });
+    var file_create = aio.FileCreate.init(cwd.fd, "test-file", .{ .read = true, .truncate = true, .mode = 0o664 });
     loop.add(&file_create.c);
 
     try loop.run(.until_done);

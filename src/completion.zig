@@ -554,17 +554,15 @@ pub const FileCreate = struct {
     } = .{},
     dir: fs.fd_t,
     path: []const u8,
-    mode: fs.mode_t,
     flags: fs.FileCreateFlags,
 
     pub const Error = fs.FileOpenError || Cancelable;
 
-    pub fn init(dir: fs.fd_t, path: []const u8, mode: fs.mode_t, flags: fs.FileCreateFlags) FileCreate {
+    pub fn init(dir: fs.fd_t, path: []const u8, flags: fs.FileCreateFlags) FileCreate {
         return .{
             .c = .init(.file_create),
             .dir = dir,
             .path = path,
-            .mode = mode,
             .flags = flags,
         };
     }

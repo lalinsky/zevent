@@ -271,6 +271,7 @@ pub fn submit(self: *Self, state: *LoopState, c: *Completion) void {
                     .write_only => .WRONLY,
                     .read_write => .RDWR,
                 },
+                .CLOEXEC = true,
             };
             sqe.prep_openat(data.dir, path, flags, 0);
             sqe.user_data = @intFromPtr(c);
@@ -292,11 +293,12 @@ pub fn submit(self: *Self, state: *LoopState, c: *Completion) void {
             };
             const flags = linux.O{
                 .ACCMODE = if (data.flags.read) .RDWR else .WRONLY,
+                .CLOEXEC = true,
                 .CREAT = true,
                 .TRUNC = data.flags.truncate,
                 .EXCL = data.flags.exclusive,
             };
-            sqe.prep_openat(data.dir, path, flags, data.mode);
+            sqe.prep_openat(data.dir, path, flags, data.flags.mode);
             sqe.user_data = @intFromPtr(c);
             data.internal.path = path;
         },

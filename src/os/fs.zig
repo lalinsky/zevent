@@ -26,6 +26,7 @@ pub const FileCreateFlags = struct {
     read: bool = false,
     truncate: bool = false,
     exclusive: bool = false,
+    mode: mode_t = 0o664,
 };
 
 pub const FileOpenError = error{
@@ -165,7 +166,7 @@ pub fn openat(allocator: std.mem.Allocator, dir: fd_t, path: []const u8, flags: 
 }
 
 /// Create a file using openat() syscall
-pub fn createat(allocator: std.mem.Allocator, dir: fd_t, path: []const u8, mode: mode_t, flags: FileCreateFlags) FileOpenError!fd_t {
+pub fn createat(allocator: std.mem.Allocator, dir: fd_t, path: []const u8, flags: FileCreateFlags) FileOpenError!fd_t {
     if (builtin.os.tag == .windows) {
         const w = std.os.windows;
 
@@ -224,7 +225,7 @@ pub fn createat(allocator: std.mem.Allocator, dir: fd_t, path: []const u8, mode:
     defer allocator.free(path_z);
 
     while (true) {
-        const rc = posix.system.openat(dir, path_z.ptr, open_flags, mode);
+        const rc = posix.system.openat(dir, path_z.ptr, open_flags, flags.mode);
         switch (posix.errno(rc)) {
             .SUCCESS => return @intCast(rc),
             .INTR => continue,
