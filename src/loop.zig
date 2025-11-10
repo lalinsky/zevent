@@ -12,6 +12,8 @@ const FileOpen = @import("completion.zig").FileOpen;
 const FileClose = @import("completion.zig").FileClose;
 const FileRead = @import("completion.zig").FileRead;
 const FileWrite = @import("completion.zig").FileWrite;
+const NetGetAddrInfo = @import("completion.zig").NetGetAddrInfo;
+const NetGetNameInfo = @import("completion.zig").NetGetNameInfo;
 const ThreadPool = @import("thread_pool.zig").ThreadPool;
 const time = @import("os/time.zig");
 const net = @import("os/net.zig");
@@ -316,6 +318,32 @@ pub const Loop = struct {
                             }
                             return;
                         },
+                        .net_getaddrinfo, .net_getnameinfo => {
+                            // DNS ops always use internal Work
+                            self.state.active += 1; // Count the cancel operation
+
+                            const work = switch (cancel.cancel_c.op) {
+                                .net_getaddrinfo => &cancel.cancel_c.cast(NetGetAddrInfo).internal.work,
+                                .net_getnameinfo => &cancel.cancel_c.cast(NetGetNameInfo).internal.work,
+                                else => unreachable,
+                            };
+
+                            if (self.thread_pool) |thread_pool| {
+                                if (thread_pool.cancel(work)) {
+                                    // Successfully canceled the internal work
+                                    completion.setResult(.cancel, {});
+                                    cancel.cancel_c.setError(error.Canceled);
+                                    self.state.markCompleted(cancel.cancel_c);
+                                }
+                                // If cancel failed, work is running/completed and will complete normally
+                            } else {
+                                // No thread pool - dns op should already be completed with error.NoThreadPool
+                                std.debug.assert(cancel.cancel_c.state == .completed);
+                                completion.setError(error.AlreadyCompleted);
+                                self.state.markCompleted(completion);
+                            }
+                            return;
+                        },
                         .file_open, .file_close, .file_read, .file_write => {
                             // File ops on backends without native support use internal Work
                             if (!Backend.supports_file_ops) {
@@ -429,6 +457,28 @@ pub const Loop = struct {
         }
     }
 
+    fn submitDnsOpToThreadPool(self: *Loop, completion: *Completion) error{NoThreadPool}!void {
+        const tp = self.thread_pool orelse return error.NoThreadPool;
+
+        switch (completion.op) {
+            .net_getaddrinfo => {
+                const get_addr_info = completion.cast(NetGetAddrInfo);
+                get_addr_info.internal.work = Work.init(common.getAddrInfoWork, null);
+                get_addr_info.internal.work.loop = self;
+                get_addr_info.internal.work.linked = completion;
+                tp.submit(&get_addr_info.internal.work);
+            },
+            .net_getnameinfo => {
+                const get_name_info = completion.cast(NetGetNameInfo);
+                get_name_info.internal.work = Work.init(common.getNameInfoWork, null);
+                get_name_info.internal.work.loop = self;
+                get_name_info.internal.work.linked = completion;
+                tp.submit(&get_name_info.internal.work);
+            },
+            else => unreachable,
+        }
+    }
+
     pub fn tick(self: *Loop, wait: bool) !void {
         if (self.done()) return;
 
@@ -463,6 +513,23 @@ pub const Loop = struct {
             // Separate cancel operations
             if (completion.op == .cancel) {
                 cancels.push(completion);
+                continue;
+            }
+
+            // DNS operations always use thread pool
+            const is_dns_op = switch (completion.op) {
+                .net_getaddrinfo, .net_getnameinfo => true,
+                else => false,
+            };
+
+            if (is_dns_op) {
+                self.submitDnsOpToThreadPool(completion) catch {
+                    // No thread pool configured
+                    completion.setError(error.NoThreadPool);
+                    self.state.markCompleted(completion);
+                    continue;
+                };
+                self.state.markRunning(completion);
                 continue;
             }
 

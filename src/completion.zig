@@ -5,6 +5,7 @@ const Backend = @import("backend.zig").Backend;
 const HeapNode = @import("heap.zig").HeapNode;
 const net = @import("os/net.zig");
 const fs = @import("os/fs.zig");
+const dns = @import("os/dns.zig");
 
 pub const OperationType = enum {
     timer,
@@ -22,6 +23,8 @@ pub const OperationType = enum {
     net_sendto,
     net_shutdown,
     net_close,
+    net_getaddrinfo,
+    net_getnameinfo,
     file_open,
     file_close,
     file_read,
@@ -129,6 +132,8 @@ pub fn completionOp(comptime T: type) OperationType {
         NetSendTo => .net_sendto,
         NetClose => .net_close,
         NetShutdown => .net_shutdown,
+        NetGetAddrInfo => .net_getaddrinfo,
+        NetGetNameInfo => .net_getnameinfo,
         FileOpen => .file_open,
         FileClose => .file_close,
         FileRead => .file_read,
@@ -154,6 +159,8 @@ pub fn CompletionType(comptime op: OperationType) type {
         .net_sendto => NetSendTo,
         .net_close => NetClose,
         .net_shutdown => NetShutdown,
+        .net_getaddrinfo => NetGetAddrInfo,
+        .net_getnameinfo => NetGetNameInfo,
         .file_open => FileOpen,
         .file_close => FileClose,
         .file_read => FileRead,
@@ -613,5 +620,79 @@ pub const FileWrite = struct {
 
     pub fn getResult(self: *const FileWrite) Error!usize {
         return self.c.getResult(.file_write);
+    }
+};
+
+pub const NetGetAddrInfo = struct {
+    c: Completion,
+    result_private_do_not_touch: usize = undefined,
+    internal: struct { work: Work = undefined } = .{},
+    node: ?[]const u8,
+    service: ?[]const u8,
+    hints: dns.AddrInfoFlags,
+    domain: net.Domain,
+    socktype: net.Type,
+    protocol: net.Protocol,
+    results: []dns.AddrInfo,
+
+    pub const Error = dns.GetAddrInfoError || Cancelable || error{NoThreadPool};
+
+    pub fn init(
+        node: ?[]const u8,
+        service: ?[]const u8,
+        hints: dns.AddrInfoFlags,
+        domain: net.Domain,
+        socktype: net.Type,
+        protocol: net.Protocol,
+        results: []dns.AddrInfo,
+    ) NetGetAddrInfo {
+        return .{
+            .c = .init(.net_getaddrinfo),
+            .node = node,
+            .service = service,
+            .hints = hints,
+            .domain = domain,
+            .socktype = socktype,
+            .protocol = protocol,
+            .results = results,
+        };
+    }
+
+    pub fn getResult(self: *const NetGetAddrInfo) Error!usize {
+        return self.c.getResult(.net_getaddrinfo);
+    }
+};
+
+pub const NetGetNameInfo = struct {
+    c: Completion,
+    result_private_do_not_touch: dns.NameInfo = undefined,
+    internal: struct { work: Work = undefined } = .{},
+    addr: *const net.sockaddr,
+    addr_len: net.socklen_t,
+    host: ?[]u8,
+    service: ?[]u8,
+    flags: dns.NameInfoFlags,
+
+    pub const Error = dns.GetNameInfoError || Cancelable || error{NoThreadPool};
+
+    pub fn init(
+        addr: *const net.sockaddr,
+        addr_len: net.socklen_t,
+        host: ?[]u8,
+        service: ?[]u8,
+        flags: dns.NameInfoFlags,
+    ) NetGetNameInfo {
+        return .{
+            .c = .init(.net_getnameinfo),
+            .addr = addr,
+            .addr_len = addr_len,
+            .host = host,
+            .service = service,
+            .flags = flags,
+        };
+    }
+
+    pub fn getResult(self: *const NetGetNameInfo) Error!dns.NameInfo {
+        return self.c.getResult(.net_getnameinfo);
     }
 };

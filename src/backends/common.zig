@@ -11,8 +11,11 @@ const FileOpen = @import("../completion.zig").FileOpen;
 const FileClose = @import("../completion.zig").FileClose;
 const FileRead = @import("../completion.zig").FileRead;
 const FileWrite = @import("../completion.zig").FileWrite;
+const NetGetAddrInfo = @import("../completion.zig").NetGetAddrInfo;
+const NetGetNameInfo = @import("../completion.zig").NetGetNameInfo;
 const net = @import("../os/net.zig");
 const fs = @import("../os/fs.zig");
+const dns = @import("../os/dns.zig");
 
 /// Helper to handle socket open operation
 pub fn handleNetOpen(c: *Completion) void {
@@ -136,4 +139,44 @@ pub fn fileWriteWork(loop: *Loop, work: *Work) void {
     const internal: *@FieldType(FileWrite, "internal") = @fieldParentPtr("work", work);
     const file_write: *FileWrite = @fieldParentPtr("internal", internal);
     handleFileWrite(&file_write.c);
+}
+
+/// Work function for NetGetAddrInfo - performs blocking getaddrinfo() syscall
+pub fn getAddrInfoWork(loop: *Loop, work: *Work) void {
+    _ = loop;
+    const internal: *@FieldType(NetGetAddrInfo, "internal") = @fieldParentPtr("work", work);
+    const get_addr_info: *NetGetAddrInfo = @fieldParentPtr("internal", internal);
+
+    if (dns.getaddrinfo(
+        get_addr_info.node,
+        get_addr_info.service,
+        get_addr_info.hints,
+        get_addr_info.domain,
+        get_addr_info.socktype,
+        get_addr_info.protocol,
+        get_addr_info.results,
+    )) |count| {
+        get_addr_info.c.setResult(.net_getaddrinfo, count);
+    } else |err| {
+        get_addr_info.c.setError(err);
+    }
+}
+
+/// Work function for NetGetNameInfo - performs blocking getnameinfo() syscall
+pub fn getNameInfoWork(loop: *Loop, work: *Work) void {
+    _ = loop;
+    const internal: *@FieldType(NetGetNameInfo, "internal") = @fieldParentPtr("work", work);
+    const get_name_info: *NetGetNameInfo = @fieldParentPtr("internal", internal);
+
+    if (dns.getnameinfo(
+        get_name_info.addr,
+        get_name_info.addr_len,
+        get_name_info.host,
+        get_name_info.service,
+        get_name_info.flags,
+    )) |result| {
+        get_name_info.c.setResult(.net_getnameinfo, result);
+    } else |err| {
+        get_name_info.c.setError(err);
+    }
 }

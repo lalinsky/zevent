@@ -278,6 +278,7 @@ pub fn tick(self: *Self, state: *LoopState, timeout_ms: u64) !bool {
 fn startCompletion(self: *Self, c: *Completion) !enum { completed, running } {
     switch (c.op) {
         .timer, .async, .work, .cancel => unreachable,
+        .net_getaddrinfo, .net_getnameinfo => unreachable, // DNS ops handled by thread pool
 
         // Synchronous operations (no io_uring support or always immediate)
         .net_open => {
@@ -474,6 +475,7 @@ fn storeResult(self: *Self, c: *Completion, res: i32) void {
         .timer, .async, .work, .cancel => unreachable,
         .net_open => unreachable,
         .net_bind => unreachable,
+        .net_getaddrinfo, .net_getnameinfo => unreachable, // DNS ops handled by thread pool
         .net_listen => unreachable,
 
         .net_connect => {
