@@ -88,11 +88,26 @@ pub const LoopState = struct {
     work_completions: AtomicStack(Completion) = .{},
 
     pub fn markCompleted(self: *LoopState, completion: *Completion) void {
+        std.debug.assert(completion.state != .completed);
+        std.debug.assert(completion.has_result);
+
         if (completion.canceled) |cancel| {
-            // Cancel should NEVER be completed before the target operation
-            std.debug.assert(cancel.c.state != .completed);
+            std.debug.assert(!cancel.c.has_result);
+            if (!cancel.c.has_result) {
+                var set = false;
+                if (completion.err) |err| {
+                    if (err == error.Canceled) {
+                        cancel.c.setResult(.cancel, {});
+                        set = true;
+                    }
+                }
+                if (!set) {
+                    cancel.c.setError(error.AlreadyCompleted);
+                }
+            }
             self.markCompleted(&cancel.c);
         }
+
         completion.state = .completed;
         self.active -= 1;
         completion.call(self.loop);
@@ -198,9 +213,8 @@ pub const Loop = struct {
     pub fn add(self: *Loop, completion: *Completion) void {
         std.debug.assert(completion.state == .new);
 
-        if (completion.canceled) |cancel| {
+        if (completion.canceled != null) {
             // Directly mark it as canceled
-            cancel.c.setResult(.cancel, {});
             completion.setError(error.Canceled);
             self.state.active += 1;
             self.state.markCompleted(completion);
@@ -267,7 +281,6 @@ pub const Loop = struct {
                         .timer => {
                             const timer = cancel.cancel_c.cast(Timer);
                             self.state.active += 1; // Count the cancel operation
-                            completion.setResult(.cancel, {});
                             timer.c.setError(error.Canceled);
                             self.state.clearTimer(timer);
                             self.state.markCompleted(&timer.c);
@@ -276,7 +289,6 @@ pub const Loop = struct {
                         .async => {
                             const async_handle = cancel.cancel_c.cast(Async);
                             self.state.active += 1; // Count the cancel operation
-                            completion.setResult(.cancel, {});
                             async_handle.c.setError(error.Canceled);
                             _ = self.state.async_handles.remove(&async_handle.c);
                             self.state.markCompleted(&async_handle.c);
@@ -292,7 +304,6 @@ pub const Loop = struct {
                                 // This will CAS from .pending to .canceled if work hasn't started
                                 if (thread_pool.cancel(work)) {
                                     // Successfully canceled, work was removed from queue
-                                    completion.setResult(.cancel, {});
                                     work.c.setError(error.Canceled);
                                     self.state.markCompleted(&work.c);
                                 }
@@ -322,7 +333,6 @@ pub const Loop = struct {
                                 if (self.thread_pool) |thread_pool| {
                                     if (thread_pool.cancel(work)) {
                                         // Successfully canceled the internal work
-                                        completion.setResult(.cancel, {});
                                         cancel.cancel_c.setError(error.Canceled);
                                         self.state.markCompleted(cancel.cancel_c);
                                     }
