@@ -38,7 +38,6 @@ const Self = @This();
 
 const log = std.log.scoped(.zio_kqueue);
 
-const c = std.c;
 
 // These are not defined in std.c for FreeBSD/NetBSD,
 // but the values are the same across all systems using kqueue
@@ -49,22 +48,22 @@ const EV_EOF: u16 = 0x8000;
 // https://github.com/ziglang/zig/pull/25853
 const EVFILT_USER: i16 = switch (builtin.target.os.tag) {
     .netbsd => 8,
-    else => std.c.EVFILT.USER,
+    else => std.std.c.EVFILT.USER,
 };
 const NOTE_TRIGGER: u32 = 0x01000000;
 
 allocator: std.mem.Allocator,
 kqueue_fd: i32 = -1,
 waker: Waker,
-change_buffer: std.ArrayListUnmanaged(c.Kevent) = .{},
+change_buffer: std.ArrayListUnmanaged(std.c.Kevent) = .{},
 
 pub fn init(self: *Self, allocator: std.mem.Allocator) !void {
-    const kq = c.kqueue();
+    const kq = std.c.kqueue();
     const kqueue_fd: i32 = switch (posix.errno(kq)) {
         .SUCCESS => @intCast(kq),
         else => |err| return posix.unexpectedErrno(err),
     };
-    errdefer _ = c.close(kqueue_fd);
+    errdefer _ = std.c.close(kqueue_fd);
 
     self.* = .{
         .allocator = allocator,
@@ -81,7 +80,7 @@ pub fn deinit(self: *Self) void {
     self.waker.deinit();
     self.change_buffer.deinit(self.allocator);
     if (self.kqueue_fd != -1) {
-        _ = c.close(self.kqueue_fd);
+        _ = std.c.close(self.kqueue_fd);
     }
 }
 
@@ -91,12 +90,12 @@ pub fn wake(self: *Self) void {
 
 fn getFilter(op: OperationType) i16 {
     return switch (op) {
-        .net_connect => c.EVFILT.WRITE,
-        .net_accept => c.EVFILT.READ,
-        .net_recv => c.EVFILT.READ,
-        .net_send => c.EVFILT.WRITE,
-        .net_recvfrom => c.EVFILT.READ,
-        .net_sendto => c.EVFILT.WRITE,
+        .net_connect => std.c.EVFILT.WRITE,
+        .net_accept => std.c.EVFILT.READ,
+        .net_recv => std.c.EVFILT.READ,
+        .net_send => std.c.EVFILT.WRITE,
+        .net_recvfrom => std.c.EVFILT.READ,
+        .net_sendto => std.c.EVFILT.WRITE,
         else => unreachable,
     };
 }
@@ -108,7 +107,7 @@ fn queueRegister(self: *Self, state: *LoopState, fd: NetHandle, completion: *Com
     self.change_buffer.append(self.allocator, .{
         .ident = @intCast(fd),
         .filter = filter,
-        .flags = c.EV.ADD | c.EV.ENABLE | c.EV.ONESHOT,
+        .flags = std.c.EV.ADD | std.c.EV.ENABLE | std.c.EV.ONESHOT,
         .fflags = 0,
         .data = 0,
         .udata = @intFromPtr(completion),
@@ -131,7 +130,7 @@ fn queueUnregister(self: *Self, fd: NetHandle, completion: *Completion) bool {
     self.change_buffer.append(self.allocator, .{
         .ident = @intCast(fd),
         .filter = filter,
-        .flags = c.EV.DELETE,
+        .flags = std.c.EV.DELETE,
         .fflags = 0,
         .data = 0,
         .udata = @intFromPtr(completion),
@@ -151,7 +150,7 @@ fn submitChanges(self: *Self) !void {
         const batch_size = @min(self.change_buffer.items.len - offset, 64);
         const batch = self.change_buffer.items[offset..][0..batch_size];
 
-        const rc = c.kevent(self.kqueue_fd, batch.ptr, @intCast(batch_size), &.{}, 0, null);
+        const rc = std.c.kevent(self.kqueue_fd, batch.ptr, @intCast(batch_size), &.{}, 0, null);
         switch (posix.errno(rc)) {
             .SUCCESS => {},
             else => |err| return posix.unexpectedErrno(err),
@@ -284,9 +283,9 @@ pub fn flush(self: *Self) !void {
 }
 
 pub fn tick(self: *Self, state: *LoopState, timeout_ms: u64) !bool {
-    var events: [64]c.Kevent = undefined;
-    var timeout_spec: c.timespec = undefined;
-    const timeout_ptr: ?*const c.timespec = if (timeout_ms < std.math.maxInt(u64)) blk: {
+    var events: [64]std.c.Kevent = undefined;
+    var timeout_spec: std.c.timespec = undefined;
+    const timeout_ptr: ?*const std.c.timespec = if (timeout_ms < std.math.maxInt(u64)) blk: {
         timeout_spec = .{
             .sec = @intCast(timeout_ms / 1000),
             .nsec = @intCast((timeout_ms % 1000) * 1_000_000),
@@ -294,7 +293,7 @@ pub fn tick(self: *Self, state: *LoopState, timeout_ms: u64) !bool {
         break :blk &timeout_spec;
     } else null;
 
-    const rc = c.kevent(self.kqueue_fd, &.{}, 0, &events, events.len, timeout_ptr);
+    const rc = std.c.kevent(self.kqueue_fd, &.{}, 0, &events, events.len, timeout_ptr);
     const n: usize = switch (posix.errno(rc)) {
         .SUCCESS => @intCast(rc),
         .INTR => 0, // Interrupted by signal, no events
@@ -339,7 +338,7 @@ pub fn tick(self: *Self, state: *LoopState, timeout_ms: u64) !bool {
 
 const CheckResult = enum { completed, requeue };
 
-fn handleKqueueError(event: *const c.Kevent, comptime errnoToError: fn (i32) anyerror) ?anyerror {
+fn handleKqueueError(event: *const std.c.Kevent, comptime errnoToError: fn (i32) anyerror) ?anyerror {
     const has_error = (event.flags & EV_ERROR) != 0;
     const has_eof = (event.flags & EV_EOF) != 0;
     if (!has_error and !has_eof) return null;
@@ -356,7 +355,7 @@ fn handleKqueueError(event: *const c.Kevent, comptime errnoToError: fn (i32) any
     return errnoToError(sock_err);
 }
 
-pub fn checkCompletion(comp: *Completion, event: *const c.Kevent) CheckResult {
+pub fn checkCompletion(comp: *Completion, event: *const std.c.Kevent) CheckResult {
     switch (comp.op) {
         .net_connect => {
             if (handleKqueueError(event, net.errnoToConnectError)) |err| {
@@ -463,15 +462,15 @@ pub const Waker = struct {
     ident: usize,
 
     pub fn init(self: *Waker, kqueue_fd: i32) !void {
-        var changes: [1]c.Kevent = .{.{
+        var changes: [1]std.c.Kevent = .{.{
             .ident = @intFromPtr(self),
             .filter = EVFILT_USER,
-            .flags = c.EV.ADD | c.EV.ENABLE | c.EV.CLEAR,
+            .flags = std.c.EV.ADD | std.c.EV.ENABLE | std.c.EV.CLEAR,
             .fflags = 0,
             .data = 0,
             .udata = 0,
         }};
-        const rc = c.kevent(kqueue_fd, &changes, 1, &.{}, 0, null);
+        const rc = std.c.kevent(kqueue_fd, &changes, 1, &.{}, 0, null);
         switch (posix.errno(rc)) {
             .SUCCESS => {},
             else => |err| {
@@ -487,15 +486,15 @@ pub const Waker = struct {
     }
 
     pub fn deinit(self: *Waker) void {
-        var changes: [1]c.Kevent = .{.{
+        var changes: [1]std.c.Kevent = .{.{
             .ident = self.ident,
             .filter = EVFILT_USER,
-            .flags = c.EV.DELETE,
+            .flags = std.c.EV.DELETE,
             .fflags = 0,
             .data = 0,
             .udata = 0,
         }};
-        const rc = c.kevent(self.kqueue_fd, &changes, 1, &.{}, 0, null);
+        const rc = std.c.kevent(self.kqueue_fd, &changes, 1, &.{}, 0, null);
         switch (posix.errno(rc)) {
             .SUCCESS => {},
             else => |err| {
@@ -506,7 +505,7 @@ pub const Waker = struct {
 
     /// Notify the event loop (thread-safe)
     pub fn notify(self: *Waker) void {
-        var changes: [1]c.Kevent = .{.{
+        var changes: [1]std.c.Kevent = .{.{
             .ident = self.ident,
             .filter = EVFILT_USER,
             .flags = 0,
@@ -514,7 +513,7 @@ pub const Waker = struct {
             .data = 0,
             .udata = 0,
         }};
-        const rc = c.kevent(self.kqueue_fd, &changes, 1, &.{}, 0, null);
+        const rc = std.c.kevent(self.kqueue_fd, &changes, 1, &.{}, 0, null);
         switch (posix.errno(rc)) {
             .SUCCESS => {},
             else => |err| {
