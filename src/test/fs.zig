@@ -30,7 +30,7 @@ test "File: open/close" {
 
     // Write some data to the file
     const write_data = "Hello, zevent!";
-    const write_iov = [_]aio.system.iovec_const{aio.system.iovecConstFromSlice(write_data)};
+    const write_iov = [_]aio.WriteBuf{.fromSlice(write_data)};
     var file_write = aio.FileWrite.init(fd, &write_iov, 0);
     loop.add(&file_write.c);
     try loop.run(.until_done);
@@ -49,7 +49,7 @@ test "File: open/close" {
 
     // Read the data back
     var read_buffer = [_]u8{0} ** 64;
-    var read_iov = [_]aio.system.iovec{aio.system.iovecFromSlice(&read_buffer)};
+    var read_iov = [_]aio.ReadBuf{.fromSlice(&read_buffer)};
     var file_read = aio.FileRead.init(fd, &read_iov, 0);
     loop.add(&file_read.c);
     try loop.run(.until_done);

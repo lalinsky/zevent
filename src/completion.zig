@@ -605,12 +605,12 @@ pub const FileRead = struct {
         false => struct { work: Work = undefined },
     } = .{},
     handle: fs.fd_t,
-    buffers: []fs.iovec,
+    buffers: []ReadBuf,
     offset: u64,
 
     pub const Error = fs.FileReadError || Cancelable;
 
-    pub fn init(handle: fs.fd_t, buffers: []fs.iovec, offset: u64) FileRead {
+    pub fn init(handle: fs.fd_t, buffers: []ReadBuf, offset: u64) FileRead {
         return .{
             .c = .init(.file_read),
             .handle = handle,
@@ -632,12 +632,12 @@ pub const FileWrite = struct {
         false => struct { work: Work = undefined },
     } = .{},
     handle: fs.fd_t,
-    buffers: []const fs.iovec_const,
+    buffers: []const WriteBuf,
     offset: u64,
 
     pub const Error = fs.FileWriteError || Cancelable;
 
-    pub fn init(handle: fs.fd_t, buffers: []const fs.iovec_const, offset: u64) FileWrite {
+    pub fn init(handle: fs.fd_t, buffers: []const WriteBuf, offset: u64) FileWrite {
         return .{
             .c = .init(.file_write),
             .handle = handle,

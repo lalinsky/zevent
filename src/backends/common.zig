@@ -13,6 +13,8 @@ const FileClose = @import("../completion.zig").FileClose;
 const FileRead = @import("../completion.zig").FileRead;
 const FileWrite = @import("../completion.zig").FileWrite;
 const FileSync = @import("../completion.zig").FileSync;
+const ReadBuf = @import("../buf.zig").ReadBuf;
+const WriteBuf = @import("../buf.zig").WriteBuf;
 const net = @import("../os/net.zig");
 const fs = @import("../os/fs.zig");
 
@@ -101,7 +103,8 @@ pub fn handleFileClose(c: *Completion) void {
 /// Helper to handle file read operation
 pub fn handleFileRead(c: *Completion) void {
     const data = c.cast(FileRead);
-    if (fs.preadv(data.handle, data.buffers, data.offset)) |bytes_read| {
+    const iov = ReadBuf.toIovecs(data.buffers);
+    if (fs.preadv(data.handle, iov, data.offset)) |bytes_read| {
         c.setResult(.file_read, bytes_read);
     } else |err| {
         c.setError(err);
@@ -111,7 +114,8 @@ pub fn handleFileRead(c: *Completion) void {
 /// Helper to handle file write operation
 pub fn handleFileWrite(c: *Completion) void {
     const data = c.cast(FileWrite);
-    if (fs.pwritev(data.handle, data.buffers, data.offset)) |bytes_written| {
+    const iov = WriteBuf.toIovecs(data.buffers);
+    if (fs.pwritev(data.handle, iov, data.offset)) |bytes_written| {
         c.setResult(.file_write, bytes_written);
     } else |err| {
         c.setError(err);

@@ -327,7 +327,8 @@ pub fn submit(self: *Self, state: *LoopState, c: *Completion) void {
                 state.markCompleted(c);
                 return;
             };
-            sqe.prep_readv(data.handle, data.buffers, data.offset);
+            const iov = ReadBuf.toIovecs(data.buffers);
+            sqe.prep_readv(data.handle, iov, data.offset);
             sqe.user_data = @intFromPtr(c);
         },
         .file_write => {
@@ -338,7 +339,8 @@ pub fn submit(self: *Self, state: *LoopState, c: *Completion) void {
                 state.markCompleted(c);
                 return;
             };
-            sqe.prep_writev(data.handle, data.buffers, data.offset);
+            const iov = WriteBuf.toIovecs(data.buffers);
+            sqe.prep_writev(data.handle, iov, data.offset);
             sqe.user_data = @intFromPtr(c);
         },
         .file_sync => {
