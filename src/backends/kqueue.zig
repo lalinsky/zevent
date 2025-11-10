@@ -51,6 +51,9 @@ const EVFILT_USER: i16 = switch (builtin.target.os.tag) {
 };
 const NOTE_TRIGGER: u32 = 0x01000000;
 
+// Maximum number of pending changes before forcing a flush
+const MAX_CHANGES: usize = 256;
+
 allocator: std.mem.Allocator,
 kqueue_fd: i32 = -1,
 waker: Waker,
@@ -99,40 +102,53 @@ fn getFilter(op: OperationType) i16 {
     };
 }
 
+/// Reserve a slot in the change buffer, flushing with non-blocking poll if full
+fn reserveChange(self: *Self, state: *LoopState) !*std.c.Kevent {
+    // If at capacity, flush with non-blocking poll to drain completions
+    if (self.change_buffer.items.len >= MAX_CHANGES) {
+        _ = try self.poll(state, 0);
+    }
+    // Ensure capacity for one more entry
+    try self.change_buffer.ensureUnusedCapacity(self.allocator, 1);
+    return self.change_buffer.addOneAssumeCapacity();
+}
+
 /// Queue a kevent change to register a completion.
 /// If queuing fails, completes the completion with error.Unexpected.
 fn queueRegister(self: *Self, state: *LoopState, fd: NetHandle, completion: *Completion) void {
     const filter = getFilter(completion.op);
-    self.change_buffer.append(self.allocator, .{
+    const change = self.reserveChange(state) catch {
+        log.err("Failed to reserve kevent change slot", .{});
+        completion.setError(error.Unexpected);
+        state.markCompleted(completion);
+        return;
+    };
+    change.* = .{
         .ident = @intCast(fd),
         .filter = filter,
         .flags = std.c.EV.ADD | std.c.EV.ENABLE | std.c.EV.ONESHOT,
         .fflags = 0,
         .data = 0,
         .udata = @intFromPtr(completion),
-    }) catch {
-        log.err("Failed to queue kevent register: OutOfMemory", .{});
-        completion.setError(error.Unexpected);
-        state.markCompleted(completion);
-        return;
     };
 }
 
 /// Queue a kevent change to unregister a completion.
 /// NOTE: Only used for cancellations; normal completions use EV_ONESHOT which auto-removes events
 /// Returns true if successfully queued, false if OOM (caller should let target complete naturally)
-fn queueUnregister(self: *Self, fd: NetHandle, completion: *Completion) bool {
+fn queueUnregister(self: *Self, state: *LoopState, fd: NetHandle, completion: *Completion) bool {
     const filter = getFilter(completion.op);
-    self.change_buffer.append(self.allocator, .{
+    const change = self.reserveChange(state) catch {
+        log.err("Failed to reserve kevent change slot for unregister", .{});
+        return false;
+    };
+    change.* = .{
         .ident = @intCast(fd),
         .filter = filter,
         .flags = std.c.EV.DELETE,
         .fflags = 0,
         .data = 0,
         .udata = @intFromPtr(completion),
-    }) catch {
-        log.err("Failed to queue kevent unregister: OutOfMemory", .{});
-        return false;
     };
     return true;
 }
@@ -260,7 +276,7 @@ pub fn cancel(self: *Self, state: *LoopState, c: *Completion) void {
 
     // Try to queue unregister
     const fd = getHandle(target);
-    if (!self.queueUnregister(fd, target)) {
+    if (!self.queueUnregister(state, fd, target)) {
         // Queueing failed - target is still registered with target.canceled set
         // When target completes, markCompleted(target) will recursively complete cancel
         return; // Do nothing, let target complete naturally

@@ -154,32 +154,25 @@ pub fn submit(self: *Self, state: *LoopState, c: *Completion) void {
         // Async operations through io_uring
         .net_connect => {
             const data = c.cast(NetConnect);
-            _ = self.ring.connect(
-                @intFromPtr(c),
-                data.handle,
-                data.addr,
-                data.addr_len,
-            ) catch {
-                log.err("Failed to prepare io_uring connect SQE", .{});
+            const sqe = self.getSqe(state) catch {
+                log.err("Failed to get io_uring SQE for connect", .{});
                 c.setError(error.Unexpected);
                 state.markCompleted(c);
                 return;
             };
+            sqe.prep_connect(data.handle, data.addr, data.addr_len);
+            sqe.user_data = @intFromPtr(c);
         },
         .net_accept => {
             const data = c.cast(NetAccept);
-            _ = self.ring.accept(
-                @intFromPtr(c),
-                data.handle,
-                data.addr,
-                data.addr_len,
-                0, // flags
-            ) catch {
-                log.err("Failed to prepare io_uring accept SQE", .{});
+            const sqe = self.getSqe(state) catch {
+                log.err("Failed to get io_uring SQE for accept", .{});
                 c.setError(error.Unexpected);
                 state.markCompleted(c);
                 return;
             };
+            sqe.prep_accept(data.handle, data.addr, data.addr_len, 0);
+            sqe.user_data = @intFromPtr(c);
         },
         .net_recv => {
             const data = c.cast(NetRecv);
@@ -193,17 +186,14 @@ pub fn submit(self: *Self, state: *LoopState, c: *Completion) void {
                 .controllen = 0,
                 .flags = 0,
             };
-            _ = self.ring.recvmsg(
-                @intFromPtr(c),
-                data.handle,
-                &data.internal.msg,
-                recvFlagsToMsg(data.flags),
-            ) catch {
-                log.err("Failed to prepare io_uring recvmsg SQE", .{});
+            const sqe = self.getSqe(state) catch {
+                log.err("Failed to get io_uring SQE for recvmsg", .{});
                 c.setError(error.Unexpected);
                 state.markCompleted(c);
                 return;
             };
+            sqe.prep_recvmsg(data.handle, &data.internal.msg, recvFlagsToMsg(data.flags));
+            sqe.user_data = @intFromPtr(c);
         },
         .net_send => {
             const data = c.cast(NetSend);
@@ -217,17 +207,14 @@ pub fn submit(self: *Self, state: *LoopState, c: *Completion) void {
                 .controllen = 0,
                 .flags = 0,
             };
-            _ = self.ring.sendmsg(
-                @intFromPtr(c),
-                data.handle,
-                &data.internal.msg,
-                sendFlagsToMsg(data.flags),
-            ) catch {
-                log.err("Failed to prepare io_uring sendmsg SQE", .{});
+            const sqe = self.getSqe(state) catch {
+                log.err("Failed to get io_uring SQE for sendmsg", .{});
                 c.setError(error.Unexpected);
                 state.markCompleted(c);
                 return;
             };
+            sqe.prep_sendmsg(data.handle, &data.internal.msg, sendFlagsToMsg(data.flags));
+            sqe.user_data = @intFromPtr(c);
         },
         .net_recvfrom => {
             const data = c.cast(NetRecvFrom);
@@ -241,17 +228,14 @@ pub fn submit(self: *Self, state: *LoopState, c: *Completion) void {
                 .controllen = 0,
                 .flags = 0,
             };
-            _ = self.ring.recvmsg(
-                @intFromPtr(c),
-                data.handle,
-                &data.internal.msg,
-                recvFlagsToMsg(data.flags),
-            ) catch {
-                log.err("Failed to prepare io_uring recvmsg SQE", .{});
+            const sqe = self.getSqe(state) catch {
+                log.err("Failed to get io_uring SQE for recvmsg", .{});
                 c.setError(error.Unexpected);
                 state.markCompleted(c);
                 return;
             };
+            sqe.prep_recvmsg(data.handle, &data.internal.msg, recvFlagsToMsg(data.flags));
+            sqe.user_data = @intFromPtr(c);
         },
         .net_sendto => {
             const data = c.cast(NetSendTo);
@@ -265,42 +249,36 @@ pub fn submit(self: *Self, state: *LoopState, c: *Completion) void {
                 .controllen = 0,
                 .flags = 0,
             };
-            _ = self.ring.sendmsg(
-                @intFromPtr(c),
-                data.handle,
-                &data.internal.msg,
-                sendFlagsToMsg(data.flags),
-            ) catch {
-                log.err("Failed to prepare io_uring sendmsg SQE", .{});
+            const sqe = self.getSqe(state) catch {
+                log.err("Failed to get io_uring SQE for sendmsg", .{});
                 c.setError(error.Unexpected);
                 state.markCompleted(c);
                 return;
             };
+            sqe.prep_sendmsg(data.handle, &data.internal.msg, sendFlagsToMsg(data.flags));
+            sqe.user_data = @intFromPtr(c);
         },
         .net_shutdown => {
             const data = c.cast(NetShutdown);
-            _ = self.ring.shutdown(
-                @intFromPtr(c),
-                data.handle,
-                @intFromEnum(data.how),
-            ) catch {
-                log.err("Failed to prepare io_uring shutdown SQE", .{});
+            const sqe = self.getSqe(state) catch {
+                log.err("Failed to get io_uring SQE for shutdown", .{});
                 c.setError(error.Unexpected);
                 state.markCompleted(c);
                 return;
             };
+            sqe.prep_shutdown(data.handle, @intFromEnum(data.how));
+            sqe.user_data = @intFromPtr(c);
         },
         .net_close => {
             const data = c.cast(NetClose);
-            _ = self.ring.close(
-                @intFromPtr(c),
-                data.handle,
-            ) catch {
-                log.err("Failed to prepare io_uring close SQE", .{});
+            const sqe = self.getSqe(state) catch {
+                log.err("Failed to get io_uring SQE for close", .{});
                 c.setError(error.Unexpected);
                 state.markCompleted(c);
                 return;
             };
+            sqe.prep_close(data.handle);
+            sqe.user_data = @intFromPtr(c);
         },
 
         .file_open => {
@@ -310,7 +288,7 @@ pub fn submit(self: *Self, state: *LoopState, c: *Completion) void {
                 state.markCompleted(c);
                 return;
             };
-            const sqe = self.ring.get_sqe() catch {
+            const sqe = self.getSqe(state) catch {
                 self.allocator.free(path);
                 log.err("Failed to get io_uring SQE for file_open", .{});
                 c.setError(error.Unexpected);
@@ -329,7 +307,7 @@ pub fn submit(self: *Self, state: *LoopState, c: *Completion) void {
         },
         .file_close => {
             const data = c.cast(FileClose);
-            const sqe = self.ring.get_sqe() catch {
+            const sqe = self.getSqe(state) catch {
                 log.err("Failed to get io_uring SQE for file_close", .{});
                 c.setError(error.Unexpected);
                 state.markCompleted(c);
@@ -340,7 +318,7 @@ pub fn submit(self: *Self, state: *LoopState, c: *Completion) void {
         },
         .file_read => {
             const data = c.cast(FileRead);
-            const sqe = self.ring.get_sqe() catch {
+            const sqe = self.getSqe(state) catch {
                 log.err("Failed to get io_uring SQE for file_read", .{});
                 c.setError(error.Unexpected);
                 state.markCompleted(c);
@@ -351,7 +329,7 @@ pub fn submit(self: *Self, state: *LoopState, c: *Completion) void {
         },
         .file_write => {
             const data = c.cast(FileWrite);
-            const sqe = self.ring.get_sqe() catch {
+            const sqe = self.getSqe(state) catch {
                 log.err("Failed to get io_uring SQE for file_write", .{});
                 c.setError(error.Unexpected);
                 state.markCompleted(c);
@@ -389,16 +367,14 @@ pub fn cancel(self: *Self, state: *LoopState, c: *Completion) void {
             // - Skip cancel CQEs (they never complete the cancel directly)
             // - Process target CQE and mark target complete
             // - markCompleted(target) recursively completes the cancel via target.canceled link
-            _ = self.ring.cancel(
-                @intFromPtr(c),
-                @intFromPtr(target),
-                0,
-            ) catch {
-                log.err("Failed to prepare io_uring cancel SQE", .{});
+            const sqe = self.getSqe(state) catch {
+                log.err("Failed to get io_uring SQE for cancel", .{});
                 // Cancel SQE failed - do nothing, let target complete naturally
                 // When target completes, markCompleted(target) will recursively complete cancel
                 return;
             };
+            sqe.prep_cancel(@intFromPtr(target), 0);
+            sqe.user_data = @intFromPtr(c);
         },
         .completed => {
             // Target already completed before cancel was processed.
@@ -407,6 +383,19 @@ pub fn cancel(self: *Self, state: *LoopState, c: *Completion) void {
             state.markCompleted(c);
         },
     }
+}
+
+/// Get an SQE, flushing the queue with non-blocking poll if full
+fn getSqe(self: *Self, state: *LoopState) !*linux.io_uring_sqe {
+    return self.ring.get_sqe() catch |err| {
+        if (err == error.SubmissionQueueFull) {
+            // Queue full - flush with non-blocking poll to drain completions
+            _ = try self.poll(state, 0);
+            // Retry after flush
+            return self.ring.get_sqe();
+        }
+        return err;
+    };
 }
 
 pub fn poll(self: *Self, state: *LoopState, timeout_ms: u64) !bool {
