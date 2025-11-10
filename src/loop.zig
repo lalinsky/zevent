@@ -460,7 +460,7 @@ pub const Loop = struct {
             }
         }
 
-        const timed_out = try self.backend.tick(&self.state, timeout_ms);
+        const timed_out = try self.backend.poll(&self.state, timeout_ms);
 
         // Process any work completions from thread pool
         self.processWorkCompletions();

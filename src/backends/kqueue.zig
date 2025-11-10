@@ -273,7 +273,7 @@ pub fn cancel(self: *Self, state: *LoopState, c: *Completion) void {
     state.markCompleted(target);
 }
 
-pub fn tick(self: *Self, state: *LoopState, timeout_ms: u64) !bool {
+pub fn poll(self: *Self, state: *LoopState, timeout_ms: u64) !bool {
     var events: [64]std.c.Kevent = undefined;
     var timeout_spec: std.c.timespec = undefined;
     const timeout_ptr: ?*const std.c.timespec = if (timeout_ms < std.math.maxInt(u64)) blk: {

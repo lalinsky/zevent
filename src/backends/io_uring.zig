@@ -409,7 +409,7 @@ pub fn cancel(self: *Self, state: *LoopState, c: *Completion) void {
     }
 }
 
-pub fn tick(self: *Self, state: *LoopState, timeout_ms: u64) !bool {
+pub fn poll(self: *Self, state: *LoopState, timeout_ms: u64) !bool {
     const linux_os = @import("../os/linux.zig");
 
     // Re-arm waker if needed (after drain() in previous tick)

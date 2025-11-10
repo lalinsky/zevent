@@ -286,7 +286,7 @@ pub fn cancel(self: *Self, state: *LoopState, c: *Completion) void {
     state.markCompleted(target);
 }
 
-pub fn tick(self: *Self, state: *LoopState, timeout_ms: u64) !bool {
+pub fn poll(self: *Self, state: *LoopState, timeout_ms: u64) !bool {
     const timeout: i32 = std.math.cast(i32, timeout_ms) orelse std.math.maxInt(i32);
 
     const n = try net.poll(self.poll_fds.items, timeout);
