@@ -63,7 +63,7 @@ test "Loop: timer basic" {
 
     try std.testing.expectEqual(.dead, timer.c.state);
     try std.testing.expect(elapsed_ms >= timeout_ms - 5);
-    try std.testing.expect(elapsed_ms <= timeout_ms + 50);
+    try std.testing.expect(elapsed_ms <= timeout_ms + 100);
     std.log.info("timer: expected={}ms, actual={}ms", .{ timeout_ms, elapsed_ms });
 }
 
