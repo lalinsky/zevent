@@ -286,6 +286,10 @@ pub const Loop = struct {
             return error.NotStarted;
         }
 
+        if (completion.op == .cancel) {
+            return error.Uncancelable;
+        }
+
         // Mark as canceled and set canceled_by
         completion.canceled = true;
         completion.canceled_by = cancel_comp;
@@ -431,13 +435,8 @@ pub const Loop = struct {
                     completion.state = .running;
 
                     self.cancelInternal(cancel_comp.target, cancel_comp) catch |err| switch (err) {
-                        error.AlreadyCanceled => {
-                            completion.setError(error.AlreadyCanceled);
-                            self.state.markCompleted(completion);
-                            return;
-                        },
-                        error.AlreadyCompleted => {
-                            completion.setError(error.AlreadyCompleted);
+                        error.AlreadyCanceled, error.AlreadyCompleted, error.Uncancelable => |e| {
+                            completion.setError(e);
                             self.state.markCompleted(completion);
                             return;
                         },

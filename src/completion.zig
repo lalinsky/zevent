@@ -185,7 +185,7 @@ pub const Cancel = struct {
     target: *Completion,
     result_private_do_not_touch: void = {},
 
-    pub const Error = error{ AlreadyCanceled, AlreadyCompleted };
+    pub const Error = error{ AlreadyCanceled, AlreadyCompleted, Uncancelable };
 
     pub fn init(target: *Completion) Cancel {
         return .{
