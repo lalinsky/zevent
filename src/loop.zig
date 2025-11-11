@@ -269,6 +269,11 @@ pub const Loop = struct {
     /// This is a fire-and-forget operation - the completion's callback will still be
     /// invoked when the operation completes (either with error.Canceled or its natural result).
     pub fn cancel(self: *Loop, completion: *Completion) !void {
+        return self.cancelInternal(completion, null);
+    }
+
+    /// Internal cancel implementation
+    fn cancelInternal(self: *Loop, completion: *Completion, cancel_comp: ?*Cancel) !void {
         // Check if already being canceled
         if (completion.canceled) return error.AlreadyCanceled;
 
@@ -281,31 +286,26 @@ pub const Loop = struct {
             return error.NotStarted;
         }
 
-        // Mark as canceled (but no Cancel completion)
+        // Mark as canceled and set canceled_by
         completion.canceled = true;
-        // completion.canceled_by remains null
+        completion.canceled_by = cancel_comp;
 
-        // Delegate to internal cancel implementation
-        self.cancelInternal(completion);
-    }
-
-    /// Internal cancel implementation shared by cancel() and add() for Cancel completions
-    fn cancelInternal(self: *Loop, target: *Completion) void {
-        switch (target.op) {
+        // Perform the cancellation
+        switch (completion.op) {
             .timer => {
-                const timer = target.cast(Timer);
+                const timer = completion.cast(Timer);
                 timer.c.setError(error.Canceled);
                 self.state.clearTimer(timer);
                 self.state.markCompleted(&timer.c);
             },
             .async => {
-                const async_handle = target.cast(Async);
+                const async_handle = completion.cast(Async);
                 async_handle.c.setError(error.Canceled);
                 _ = self.state.async_handles.remove(&async_handle.c);
                 self.state.markCompleted(&async_handle.c);
             },
             .work => {
-                const work = target.cast(Work);
+                const work = completion.cast(Work);
                 std.debug.assert(work.linked == null); // User Work should never have linked set
 
                 if (self.thread_pool) |thread_pool| {
@@ -325,37 +325,37 @@ pub const Loop = struct {
             .file_open, .file_create, .file_close, .file_read, .file_write, .file_sync, .file_rename, .file_delete => {
                 // File ops on backends without native support use internal Work
                 if (!Backend.supports_file_ops) {
-                    const work = switch (target.op) {
-                        .file_open => &target.cast(FileOpen).internal.work,
-                        .file_create => &target.cast(FileCreate).internal.work,
-                        .file_close => &target.cast(FileClose).internal.work,
-                        .file_read => &target.cast(FileRead).internal.work,
-                        .file_write => &target.cast(FileWrite).internal.work,
-                        .file_sync => &target.cast(FileSync).internal.work,
-                        .file_rename => &target.cast(FileRename).internal.work,
-                        .file_delete => &target.cast(FileDelete).internal.work,
+                    const work = switch (completion.op) {
+                        .file_open => &completion.cast(FileOpen).internal.work,
+                        .file_create => &completion.cast(FileCreate).internal.work,
+                        .file_close => &completion.cast(FileClose).internal.work,
+                        .file_read => &completion.cast(FileRead).internal.work,
+                        .file_write => &completion.cast(FileWrite).internal.work,
+                        .file_sync => &completion.cast(FileSync).internal.work,
+                        .file_rename => &completion.cast(FileRename).internal.work,
+                        .file_delete => &completion.cast(FileDelete).internal.work,
                         else => unreachable,
                     };
 
                     if (self.thread_pool) |thread_pool| {
                         if (thread_pool.cancel(work)) {
                             // Successfully canceled the internal work
-                            target.setError(error.Canceled);
-                            self.state.markCompleted(target);
+                            completion.setError(error.Canceled);
+                            self.state.markCompleted(completion);
                         }
                         // If cancel failed, work is running/completed and will complete normally
                     } else {
                         // No thread pool - file op should already be completed with error.Unexpected
-                        std.debug.assert(target.state == .completed or target.state == .dead);
+                        std.debug.assert(completion.state == .completed or completion.state == .dead);
                     }
                 } else {
                     // Backend operations with native support
-                    self.backend.cancel(&self.state, target);
+                    self.backend.cancel(&self.state, completion);
                 }
             },
             else => {
                 // Backend operations (net_*, etc)
-                self.backend.cancel(&self.state, target);
+                self.backend.cancel(&self.state, completion);
             },
         }
     }
@@ -424,41 +424,32 @@ pub const Loop = struct {
             },
             else => {
                 if (completion.op == .cancel) {
-                    const cancel_op = completion.cast(Cancel);
+                    const cancel_comp = completion.cast(Cancel);
 
-                    if (cancel_op.target.canceled) {
-                        completion.setError(error.AlreadyCanceled);
-                        self.state.active += 1;
-                        completion.state = .running;
-                        self.state.markCompleted(completion);
-                        return;
-                    }
-
-                    if (cancel_op.target.state == .completed or cancel_op.target.state == .dead) {
-                        completion.setError(error.AlreadyCompleted);
-                        self.state.active += 1;
-                        completion.state = .running;
-                        self.state.markCompleted(completion);
-                        return;
-                    }
-
-                    cancel_op.target.canceled = true;
-                    cancel_op.target.canceled_by = cancel_op;
-
-                    if (cancel_op.target.state == .new) {
-                        // Completion hasn't been added yet - just mark it as canceled
-                        // When it gets added, the early-exit check at the start of add() will catch it
-                        // and complete both the target and this cancel operation
-                        self.state.active += 1;
-                        return;
-                    }
-
-                    // Count the cancel operation as active
-                    completion.state = .running;
+                    // Cancel completion is always active and running
                     self.state.active += 1;
+                    completion.state = .running;
 
-                    // Use shared cancel implementation
-                    self.cancelInternal(cancel_op.target);
+                    self.cancelInternal(cancel_comp.target, cancel_comp) catch |err| switch (err) {
+                        error.AlreadyCanceled => {
+                            completion.setError(error.AlreadyCanceled);
+                            self.state.markCompleted(completion);
+                            return;
+                        },
+                        error.AlreadyCompleted => {
+                            completion.setError(error.AlreadyCompleted);
+                            self.state.markCompleted(completion);
+                            return;
+                        },
+                        error.NotStarted => {
+                            // Target hasn't been added yet - mark as canceled and wait
+                            // When it gets added, the early-exit check at the start of add() will catch it
+                            cancel_comp.target.canceled = true;
+                            cancel_comp.target.canceled_by = cancel_comp;
+                            return;
+                        },
+                    };
+
                     return;
                 }
 
