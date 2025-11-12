@@ -19,10 +19,10 @@ pub const unexpected_error_tracing = builtin.mode == .Debug and switch (builtin.
 pub fn unexpectedError(err: anytype) error{Unexpected} {
     if (unexpected_error_tracing) {
         std.debug.print(
-            \\unexpected error: {d}
+            \\unexpected error: {}
             \\please file a bug report: https://github.com/lalinsky/aio.zig/issues/new
             \\
-        , .{@intFromEnum(err)});
+        , .{err});
         if (builtin.zig_version.major == 0 and builtin.zig_version.minor < 16) {
             std.debug.dumpCurrentStackTrace(null);
         } else {

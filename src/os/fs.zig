@@ -502,7 +502,7 @@ pub fn unlinkat(allocator: std.mem.Allocator, dir: fd_t, path: []const u8) FileD
                 error.NotDir => error.NotDir,
                 error.NetworkNotFound => error.FileNotFound,
                 error.DirNotEmpty => error.DirNotEmpty,
-                else => |err| return unexpectedError(err),
+                error.Unexpected => error.Unexpected,
             };
         };
 
