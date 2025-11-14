@@ -110,6 +110,10 @@ pub const Completion = struct {
     /// Whether a result has been set (for debugging/assertions).
     has_result: bool = false,
 
+    /// Backend-specific internal data for async operations.
+    /// Used by backends like IOCP to store OVERLAPPED structures.
+    internal: if (@hasDecl(Backend, "CompletionData")) Backend.CompletionData else struct {} = .{},
+
     /// Intrusive linked list of completions.
     /// Used for submission queue OR poll queue (mutually exclusive).
     prev: ?*Completion = null,
@@ -409,6 +413,7 @@ pub const NetListen = struct {
 pub const NetConnect = struct {
     c: Completion,
     result_private_do_not_touch: void = {},
+    internal: if (@hasDecl(Backend, "NetConnectData")) Backend.NetConnectData else struct {} = .{},
     handle: Backend.NetHandle,
     addr: *const net.sockaddr,
     addr_len: net.socklen_t,
@@ -432,6 +437,7 @@ pub const NetConnect = struct {
 pub const NetAccept = struct {
     c: Completion,
     result_private_do_not_touch: Backend.NetHandle = undefined,
+    internal: if (@hasDecl(Backend, "NetAcceptData")) Backend.NetAcceptData else struct {} = .{},
     handle: Backend.NetHandle,
     addr: ?*net.sockaddr,
     addr_len: ?*net.socklen_t,
