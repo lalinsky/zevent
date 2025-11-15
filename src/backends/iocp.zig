@@ -485,7 +485,7 @@ fn submitRecv(self: *Self, state: *LoopState, data: *NetRecv) !void {
 
     const result = windows.ws2_32.WSARecv(
         data.handle,
-        @ptrCast(wsabufs.ptr),
+        wsabufs.ptr,
         @intCast(wsabufs.len),
         &bytes_received,
         &flags,
@@ -523,7 +523,7 @@ fn submitSend(self: *Self, state: *LoopState, data: *NetSend) !void {
 
     const result = windows.ws2_32.WSASend(
         data.handle,
-        @ptrCast(@constCast(wsabufs.ptr)),
+        @constCast(wsabufs.ptr),
         @intCast(wsabufs.len),
         &bytes_sent,
         flags,
@@ -552,16 +552,16 @@ fn submitRecvFrom(self: *Self, state: *LoopState, data: *NetRecvFrom) !void {
     // Initialize OVERLAPPED
     data.c.internal.overlapped = std.mem.zeroes(windows.OVERLAPPED);
 
-    // iovecs are already WSABUF on Windows - use first one
-    var wsabuf = data.buffer.iovecs[0];
+    // iovecs are already WSABUF on Windows
+    const wsabufs = data.buffer.iovecs;
 
     var bytes_received: windows.DWORD = 0;
     var flags: windows.DWORD = 0;
 
     const result = windows.ws2_32.WSARecvFrom(
         data.handle,
-        @ptrCast(&wsabuf),
-        1,
+        wsabufs.ptr,
+        @intCast(wsabufs.len),
         &bytes_received,
         &flags,
         if (data.addr) |addr| @ptrCast(addr) else null,
@@ -591,16 +591,16 @@ fn submitSendTo(self: *Self, state: *LoopState, data: *NetSendTo) !void {
     // Initialize OVERLAPPED
     data.c.internal.overlapped = std.mem.zeroes(windows.OVERLAPPED);
 
-    // iovecs are already WSABUF on Windows - use first one (cast away const)
-    var wsabuf: windows.ws2_32.WSABUF = @constCast(&data.buffer.iovecs[0]).*;
+    // iovecs are already WSABUF on Windows (need to cast away const)
+    const wsabufs = data.buffer.iovecs;
 
     var bytes_sent: windows.DWORD = 0;
     const flags: windows.DWORD = 0;
 
     const result = windows.ws2_32.WSASendTo(
         data.handle,
-        @ptrCast(&wsabuf),
-        1,
+        @constCast(wsabufs.ptr),
+        @intCast(wsabufs.len),
         &bytes_sent,
         flags,
         @ptrCast(data.addr),
