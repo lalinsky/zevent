@@ -17,6 +17,10 @@ pub const BackendCapabilities = struct {
     file_sync: bool = false,
     file_rename: bool = false,
     file_delete: bool = false,
+
+    pub fn supportsNonBlockingFileIo(comptime self: BackendCapabilities) bool {
+        return self.file_read or self.file_write;
+    }
 };
 
 pub const Op = enum {

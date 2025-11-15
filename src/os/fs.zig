@@ -3,7 +3,6 @@ const builtin = @import("builtin");
 const posix = @import("posix.zig");
 
 const unexpectedError = @import("base.zig").unexpectedError;
-const Backend = @import("../backend.zig").Backend;
 
 pub const fd_t = switch (builtin.os.tag) {
     .windows => std.os.windows.HANDLE,
@@ -23,9 +22,7 @@ pub const FileOpenMode = enum {
 
 pub const FileOpenFlags = struct {
     mode: FileOpenMode = .read_only,
-    /// Enable non-blocking/async I/O (O_NONBLOCK on Unix, FILE_FLAG_OVERLAPPED on Windows).
-    /// Defaults to true if backend supports async file read/write.
-    nonblocking: bool = Backend.capabilities.file_read or Backend.capabilities.file_write,
+    nonblocking: bool = false,
 };
 
 pub const FileCreateFlags = struct {
@@ -33,9 +30,7 @@ pub const FileCreateFlags = struct {
     truncate: bool = false,
     exclusive: bool = false,
     mode: mode_t = 0o664,
-    /// Enable non-blocking/async I/O (O_NONBLOCK on Unix, FILE_FLAG_OVERLAPPED on Windows).
-    /// Defaults to true if backend supports async file read/write.
-    nonblocking: bool = Backend.capabilities.file_read or Backend.capabilities.file_write,
+    nonblocking: bool = false,
 };
 
 pub const FileOpenError = error{
