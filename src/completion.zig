@@ -8,6 +8,17 @@ const WriteBuf = @import("buf.zig").WriteBuf;
 const net = @import("os/net.zig");
 const fs = @import("os/fs.zig");
 
+pub const BackendCapabilities = struct {
+    file_read: bool = false,
+    file_write: bool = false,
+    file_open: bool = false,
+    file_create: bool = false,
+    file_close: bool = false,
+    file_sync: bool = false,
+    file_rename: bool = false,
+    file_delete: bool = false,
+};
+
 pub const Op = enum {
     timer,
     cancel,
@@ -582,7 +593,7 @@ pub const NetSendTo = struct {
 pub const FileOpen = struct {
     c: Completion,
     result_private_do_not_touch: fs.fd_t = undefined,
-    internal: switch (@hasDecl(Backend, "supports_file_ops") and Backend.supports_file_ops) {
+    internal: switch (Backend.capabilities.file_open) {
         true => if (@hasDecl(Backend, "FileOpenData")) Backend.FileOpenData else struct {},
         false => struct { work: Work = undefined, allocator: std.mem.Allocator = undefined },
     } = .{},
@@ -609,7 +620,7 @@ pub const FileOpen = struct {
 pub const FileCreate = struct {
     c: Completion,
     result_private_do_not_touch: fs.fd_t = undefined,
-    internal: switch (@hasDecl(Backend, "supports_file_ops") and Backend.supports_file_ops) {
+    internal: switch (Backend.capabilities.file_create) {
         true => if (@hasDecl(Backend, "FileCreateData")) Backend.FileCreateData else struct {},
         false => struct { work: Work = undefined, allocator: std.mem.Allocator = undefined },
     } = .{},
@@ -636,7 +647,7 @@ pub const FileCreate = struct {
 pub const FileClose = struct {
     c: Completion,
     result_private_do_not_touch: void = {},
-    internal: switch (@hasDecl(Backend, "supports_file_ops") and Backend.supports_file_ops) {
+    internal: switch (Backend.capabilities.file_close) {
         true => if (@hasDecl(Backend, "FileCloseData")) Backend.FileCloseData else struct {},
         false => struct { work: Work = undefined },
     } = .{},
@@ -659,7 +670,7 @@ pub const FileClose = struct {
 pub const FileRead = struct {
     c: Completion,
     result_private_do_not_touch: usize = undefined,
-    internal: switch (@hasDecl(Backend, "supports_file_ops") and Backend.supports_file_ops) {
+    internal: switch (Backend.capabilities.file_read) {
         true => if (@hasDecl(Backend, "FileReadData")) Backend.FileReadData else struct {},
         false => struct { work: Work = undefined },
     } = .{},
@@ -686,7 +697,7 @@ pub const FileRead = struct {
 pub const FileWrite = struct {
     c: Completion,
     result_private_do_not_touch: usize = undefined,
-    internal: switch (@hasDecl(Backend, "supports_file_ops") and Backend.supports_file_ops) {
+    internal: switch (Backend.capabilities.file_write) {
         true => if (@hasDecl(Backend, "FileWriteData")) Backend.FileWriteData else struct {},
         false => struct { work: Work = undefined },
     } = .{},
@@ -713,7 +724,7 @@ pub const FileWrite = struct {
 pub const FileSync = struct {
     c: Completion,
     result_private_do_not_touch: void = {},
-    internal: switch (@hasDecl(Backend, "supports_file_ops") and Backend.supports_file_ops) {
+    internal: switch (Backend.capabilities.file_sync) {
         true => if (@hasDecl(Backend, "FileSyncData")) Backend.FileSyncData else struct {},
         false => struct { work: Work = undefined },
     } = .{},
@@ -738,7 +749,7 @@ pub const FileSync = struct {
 pub const FileRename = struct {
     c: Completion,
     result_private_do_not_touch: void = {},
-    internal: switch (@hasDecl(Backend, "supports_file_ops") and Backend.supports_file_ops) {
+    internal: switch (Backend.capabilities.file_rename) {
         true => if (@hasDecl(Backend, "FileRenameData")) Backend.FileRenameData else struct {},
         false => struct { work: Work = undefined, allocator: std.mem.Allocator = undefined },
     } = .{},
@@ -767,7 +778,7 @@ pub const FileRename = struct {
 pub const FileDelete = struct {
     c: Completion,
     result_private_do_not_touch: void = {},
-    internal: switch (@hasDecl(Backend, "supports_file_ops") and Backend.supports_file_ops) {
+    internal: switch (Backend.capabilities.file_delete) {
         true => if (@hasDecl(Backend, "FileDeleteData")) Backend.FileDeleteData else struct {},
         false => struct { work: Work = undefined, allocator: std.mem.Allocator = undefined },
     } = .{},

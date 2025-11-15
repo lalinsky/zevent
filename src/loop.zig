@@ -287,6 +287,21 @@ pub const Loop = struct {
         return self.cancelInternal(completion, null);
     }
 
+    /// Helper to cancel a file operation that's running in the thread pool
+    fn cancelFileOpViaThreadPool(self: *Loop, completion: *Completion, work: *Work) void {
+        if (self.thread_pool) |thread_pool| {
+            if (thread_pool.cancel(work)) {
+                // Successfully canceled the internal work
+                completion.setError(error.Canceled);
+                self.state.markCompleted(completion);
+            }
+            // If cancel failed, work is running/completed and will complete normally
+        } else {
+            // No thread pool - file op should already be completed with error.Unexpected
+            std.debug.assert(completion.state == .completed or completion.state == .dead);
+        }
+    }
+
     /// Internal cancel implementation
     fn cancelInternal(self: *Loop, completion: *Completion, cancel_comp: ?*Cancel) !void {
         // Check if already being canceled
@@ -341,34 +356,59 @@ pub const Loop = struct {
                     std.debug.assert(work.c.state == .completed or work.c.state == .dead);
                 }
             },
-            .file_open, .file_create, .file_close, .file_read, .file_write, .file_sync, .file_rename, .file_delete => {
-                // File ops on backends without native support use internal Work
-                if (!Backend.supports_file_ops) {
-                    const work = switch (completion.op) {
-                        .file_open => &completion.cast(FileOpen).internal.work,
-                        .file_create => &completion.cast(FileCreate).internal.work,
-                        .file_close => &completion.cast(FileClose).internal.work,
-                        .file_read => &completion.cast(FileRead).internal.work,
-                        .file_write => &completion.cast(FileWrite).internal.work,
-                        .file_sync => &completion.cast(FileSync).internal.work,
-                        .file_rename => &completion.cast(FileRename).internal.work,
-                        .file_delete => &completion.cast(FileDelete).internal.work,
-                        else => unreachable,
-                    };
-
-                    if (self.thread_pool) |thread_pool| {
-                        if (thread_pool.cancel(work)) {
-                            // Successfully canceled the internal work
-                            completion.setError(error.Canceled);
-                            self.state.markCompleted(completion);
-                        }
-                        // If cancel failed, work is running/completed and will complete normally
-                    } else {
-                        // No thread pool - file op should already be completed with error.Unexpected
-                        std.debug.assert(completion.state == .completed or completion.state == .dead);
-                    }
+            .file_open => {
+                if (!Backend.capabilities.file_open) {
+                    self.cancelFileOpViaThreadPool(completion, &completion.cast(FileOpen).internal.work);
                 } else {
-                    // Backend operations with native support
+                    self.backend.cancel(&self.state, completion);
+                }
+            },
+            .file_create => {
+                if (!Backend.capabilities.file_create) {
+                    self.cancelFileOpViaThreadPool(completion, &completion.cast(FileCreate).internal.work);
+                } else {
+                    self.backend.cancel(&self.state, completion);
+                }
+            },
+            .file_close => {
+                if (!Backend.capabilities.file_close) {
+                    self.cancelFileOpViaThreadPool(completion, &completion.cast(FileClose).internal.work);
+                } else {
+                    self.backend.cancel(&self.state, completion);
+                }
+            },
+            .file_read => {
+                if (!Backend.capabilities.file_read) {
+                    self.cancelFileOpViaThreadPool(completion, &completion.cast(FileRead).internal.work);
+                } else {
+                    self.backend.cancel(&self.state, completion);
+                }
+            },
+            .file_write => {
+                if (!Backend.capabilities.file_write) {
+                    self.cancelFileOpViaThreadPool(completion, &completion.cast(FileWrite).internal.work);
+                } else {
+                    self.backend.cancel(&self.state, completion);
+                }
+            },
+            .file_sync => {
+                if (!Backend.capabilities.file_sync) {
+                    self.cancelFileOpViaThreadPool(completion, &completion.cast(FileSync).internal.work);
+                } else {
+                    self.backend.cancel(&self.state, completion);
+                }
+            },
+            .file_rename => {
+                if (!Backend.capabilities.file_rename) {
+                    self.cancelFileOpViaThreadPool(completion, &completion.cast(FileRename).internal.work);
+                } else {
+                    self.backend.cancel(&self.state, completion);
+                }
+            },
+            .file_delete => {
+                if (!Backend.capabilities.file_delete) {
+                    self.cancelFileOpViaThreadPool(completion, &completion.cast(FileDelete).internal.work);
+                } else {
                     self.backend.cancel(&self.state, completion);
                 }
             },
@@ -482,14 +522,40 @@ pub const Loop = struct {
 
                 // Regular backend operation
                 // Route file operations to thread pool for backends without native support
-                if (!Backend.supports_file_ops) {
-                    switch (completion.op) {
-                        .file_open, .file_create, .file_close, .file_read, .file_write, .file_sync, .file_rename, .file_delete => {
-                            self.submitFileOpToThreadPool(completion);
-                            return;
-                        },
-                        else => {},
-                    }
+                switch (completion.op) {
+                    .file_open => if (!Backend.capabilities.file_open) {
+                        self.submitFileOpToThreadPool(completion);
+                        return;
+                    },
+                    .file_create => if (!Backend.capabilities.file_create) {
+                        self.submitFileOpToThreadPool(completion);
+                        return;
+                    },
+                    .file_close => if (!Backend.capabilities.file_close) {
+                        self.submitFileOpToThreadPool(completion);
+                        return;
+                    },
+                    .file_read => if (!Backend.capabilities.file_read) {
+                        self.submitFileOpToThreadPool(completion);
+                        return;
+                    },
+                    .file_write => if (!Backend.capabilities.file_write) {
+                        self.submitFileOpToThreadPool(completion);
+                        return;
+                    },
+                    .file_sync => if (!Backend.capabilities.file_sync) {
+                        self.submitFileOpToThreadPool(completion);
+                        return;
+                    },
+                    .file_rename => if (!Backend.capabilities.file_rename) {
+                        self.submitFileOpToThreadPool(completion);
+                        return;
+                    },
+                    .file_delete => if (!Backend.capabilities.file_delete) {
+                        self.submitFileOpToThreadPool(completion);
+                        return;
+                    },
+                    else => {},
                 }
 
                 self.backend.submit(&self.state, completion);

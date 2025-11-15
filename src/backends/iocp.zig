@@ -1,6 +1,7 @@
 const std = @import("std");
 const windows = std.os.windows;
 const net = @import("../os/net.zig");
+const fs = @import("../os/fs.zig");
 const common = @import("common.zig");
 const LoopState = @import("../loop.zig").LoopState;
 const Completion = @import("../completion.zig").Completion;
@@ -18,9 +19,14 @@ const NetRecvFrom = @import("../completion.zig").NetRecvFrom;
 const NetSendTo = @import("../completion.zig").NetSendTo;
 const NetClose = @import("../completion.zig").NetClose;
 const NetShutdown = @import("../completion.zig").NetShutdown;
+const FileOpen = @import("../completion.zig").FileOpen;
+const FileCreate = @import("../completion.zig").FileCreate;
+const FileClose = @import("../completion.zig").FileClose;
 const FileRead = @import("../completion.zig").FileRead;
 const FileWrite = @import("../completion.zig").FileWrite;
 const FileSync = @import("../completion.zig").FileSync;
+const FileRename = @import("../completion.zig").FileRename;
+const FileDelete = @import("../completion.zig").FileDelete;
 
 // Windows API functions not in std
 extern "kernel32" fn QueueUserAPC(
@@ -94,7 +100,12 @@ fn loadWinsockExtension(comptime T: type, sock: windows.ws2_32.SOCKET, guid: win
 
 pub const NetHandle = net.fd_t;
 
-pub const supports_file_ops = true;
+const BackendCapabilities = @import("../completion.zig").BackendCapabilities;
+
+pub const capabilities: BackendCapabilities = .{
+    .file_read = true,
+    .file_write = true,
+};
 
 // Backend-specific data stored in Completion.internal
 pub const CompletionData = struct {
@@ -385,17 +396,68 @@ pub fn submit(self: *Self, state: *LoopState, c: *Completion) void {
             };
         },
 
-        .file_open,
-        .file_create,
-        .file_close,
-        .file_read,
-        .file_write,
-        .file_sync,
-        .file_rename,
-        .file_delete,
-        => {
-            c.setError(error.Unexpected);
-            state.markCompleted(c);
+        .file_open => {
+            const data = c.cast(FileOpen);
+            self.submitFileOpen(state, data) catch |err| {
+                c.setError(err);
+                state.markCompleted(c);
+            };
+        },
+
+        .file_create => {
+            const data = c.cast(FileCreate);
+            self.submitFileCreate(state, data) catch |err| {
+                c.setError(err);
+                state.markCompleted(c);
+            };
+        },
+
+        .file_close => {
+            const data = c.cast(FileClose);
+            self.submitFileClose(state, data) catch |err| {
+                c.setError(err);
+                state.markCompleted(c);
+            };
+        },
+
+        .file_read => {
+            const data = c.cast(FileRead);
+            self.submitFileRead(state, data) catch |err| {
+                c.setError(err);
+                state.markCompleted(c);
+            };
+        },
+
+        .file_write => {
+            const data = c.cast(FileWrite);
+            self.submitFileWrite(state, data) catch |err| {
+                c.setError(err);
+                state.markCompleted(c);
+            };
+        },
+
+        .file_sync => {
+            const data = c.cast(FileSync);
+            self.submitFileSync(state, data) catch |err| {
+                c.setError(err);
+                state.markCompleted(c);
+            };
+        },
+
+        .file_rename => {
+            const data = c.cast(FileRename);
+            self.submitFileRename(state, data) catch |err| {
+                c.setError(err);
+                state.markCompleted(c);
+            };
+        },
+
+        .file_delete => {
+            const data = c.cast(FileDelete);
+            self.submitFileDelete(state, data) catch |err| {
+                c.setError(err);
+                state.markCompleted(c);
+            };
         },
     }
 }
