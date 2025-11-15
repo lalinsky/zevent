@@ -491,20 +491,20 @@ fn submitRecv(self: *Self, state: *LoopState, data: *NetRecv) !void {
         null, // No completion routine
     );
 
-    if (result == 0) {
-        // Completed immediately
-        data.c.setResult(.net_recv, @intCast(bytes_received));
-        state.markCompleted(&data.c);
-    } else {
+    // When WSARecv succeeds (result == 0) OR returns WSA_IO_PENDING,
+    // the completion will be posted to the IOCP port. We should NOT
+    // complete it immediately here.
+    if (result == windows.ws2_32.SOCKET_ERROR) {
         const err = windows.ws2_32.WSAGetLastError();
-        if (err == .WSA_IO_PENDING) {
-            // Async operation started - will complete via IOCP
-            return;
-        } else {
+        if (err != .WSA_IO_PENDING) {
+            // Real error - complete immediately with error
             log.err("WSARecv failed: {}", .{err});
-            return error.Unexpected;
+            data.c.setError(error.Unexpected);
+            state.markCompleted(&data.c);
+            return;
         }
     }
+    // Operation will complete via IOCP (either immediate or async)
 }
 
 fn submitSend(self: *Self, state: *LoopState, data: *NetSend) !void {
@@ -529,20 +529,19 @@ fn submitSend(self: *Self, state: *LoopState, data: *NetSend) !void {
         null, // No completion routine
     );
 
-    if (result == 0) {
-        // Completed immediately
-        data.c.setResult(.net_send, @intCast(bytes_sent));
-        state.markCompleted(&data.c);
-    } else {
+    // When WSASend succeeds (result == 0) OR returns WSA_IO_PENDING,
+    // the completion will be posted to the IOCP port.
+    if (result == windows.ws2_32.SOCKET_ERROR) {
         const err = windows.ws2_32.WSAGetLastError();
-        if (err == .WSA_IO_PENDING) {
-            // Async operation started - will complete via IOCP
-            return;
-        } else {
+        if (err != .WSA_IO_PENDING) {
+            // Real error - complete immediately with error
             log.err("WSASend failed: {}", .{err});
-            return error.Unexpected;
+            data.c.setError(error.Unexpected);
+            state.markCompleted(&data.c);
+            return;
         }
     }
+    // Operation will complete via IOCP (either immediate or async)
 }
 
 fn submitRecvFrom(self: *Self, state: *LoopState, data: *NetRecvFrom) !void {
@@ -569,20 +568,19 @@ fn submitRecvFrom(self: *Self, state: *LoopState, data: *NetRecvFrom) !void {
         null, // No completion routine
     );
 
-    if (result == 0) {
-        // Completed immediately
-        data.c.setResult(.net_recvfrom, @intCast(bytes_received));
-        state.markCompleted(&data.c);
-    } else {
+    // When WSARecvFrom succeeds (result == 0) OR returns WSA_IO_PENDING,
+    // the completion will be posted to the IOCP port.
+    if (result == windows.ws2_32.SOCKET_ERROR) {
         const err = windows.ws2_32.WSAGetLastError();
-        if (err == .WSA_IO_PENDING) {
-            // addr_len will be updated by WSARecvFrom when the operation completes
-            return;
-        } else {
+        if (err != .WSA_IO_PENDING) {
+            // Real error - complete immediately with error
             log.err("WSARecvFrom failed: {}", .{err});
-            return error.Unexpected;
+            data.c.setError(error.Unexpected);
+            state.markCompleted(&data.c);
+            return;
         }
     }
+    // Operation will complete via IOCP (either immediate or async)
 }
 
 fn submitSendTo(self: *Self, state: *LoopState, data: *NetSendTo) !void {
@@ -609,20 +607,19 @@ fn submitSendTo(self: *Self, state: *LoopState, data: *NetSendTo) !void {
         null, // No completion routine
     );
 
-    if (result == 0) {
-        // Completed immediately
-        data.c.setResult(.net_sendto, @intCast(bytes_sent));
-        state.markCompleted(&data.c);
-    } else {
+    // When WSASendTo succeeds (result == 0) OR returns WSA_IO_PENDING,
+    // the completion will be posted to the IOCP port.
+    if (result == windows.ws2_32.SOCKET_ERROR) {
         const err = windows.ws2_32.WSAGetLastError();
-        if (err == .WSA_IO_PENDING) {
-            // Async operation started - will complete via IOCP
-            return;
-        } else {
+        if (err != .WSA_IO_PENDING) {
+            // Real error - complete immediately with error
             log.err("WSASendTo failed: {}", .{err});
-            return error.Unexpected;
+            data.c.setError(error.Unexpected);
+            state.markCompleted(&data.c);
+            return;
         }
     }
+    // Operation will complete via IOCP (either immediate or async)
 }
 
 fn submitConnect(self: *Self, state: *LoopState, data: *NetConnect) !void {
