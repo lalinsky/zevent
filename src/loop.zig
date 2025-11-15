@@ -560,6 +560,10 @@ pub const Loop = struct {
 
         switch (completion.op) {
             inline .file_open, .file_create, .file_close, .file_read, .file_write, .file_sync, .file_rename, .file_delete => |op| {
+                if (@field(Backend.capabilities, @tagName(op))) {
+                    unreachable;
+                }
+
                 const op_func = switch (op) {
                     .file_open => common.fileOpenWork,
                     .file_create => common.fileCreateWork,
@@ -571,8 +575,11 @@ pub const Loop = struct {
                     .file_delete => common.fileDeleteWork,
                     else => unreachable,
                 };
+
                 const op_data = completion.cast(op.toType());
-                op_data.internal.allocator = self.allocator;
+                if (@hasField(@TypeOf(op_data.internal), "allocation")) {
+                    op_data.internal.allocator = self.allocator;
+                }
                 op_data.internal.work = Work.init(op_func, null);
                 op_data.internal.work.loop = self;
                 op_data.internal.work.linked = completion;
