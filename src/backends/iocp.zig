@@ -105,7 +105,6 @@ pub const NetAcceptData = struct {
     addr_buffer: [128]u8 = undefined,
 };
 
-
 const ExtensionFunctions = struct {
     acceptex: LPFN_ACCEPTEX,
     connectex: LPFN_CONNECTEX,
@@ -204,7 +203,6 @@ pub const NetShutdownHow = net.ShutdownHow;
 pub const NetShutdownError = error{
     Unexpected,
 };
-
 
 const Self = @This();
 
@@ -702,6 +700,13 @@ pub fn cancel(self: *Self, state: *LoopState, target: *Completion) void {
 
 fn processCompletion(self: *Self, state: *LoopState, entry: *const windows.OVERLAPPED_ENTRY) void {
     // Get the OVERLAPPED pointer from the entry
+    // Note: lpOverlapped can be null in error cases, despite Zig's type definition
+    if (@intFromPtr(entry.lpOverlapped) == 0) {
+        // NULL overlapped can occur when the IOCP port itself is closed
+        // or in some error conditions - just ignore it
+        log.warn("Received IOCP completion with NULL overlapped", .{});
+        return;
+    }
     const overlapped = entry.lpOverlapped;
 
     // Use @fieldParentPtr to get from OVERLAPPED to CompletionData
