@@ -463,7 +463,7 @@ fn submitAccept(self: *Self, state: *LoopState, data: *NetAccept) !void {
             // Real error - complete immediately with error
             net.close(accept_socket);
             log.err("AcceptEx failed: {}", .{err});
-            data.c.setError(error.Unexpected);
+            data.c.setError(net.errnoToAcceptError(err));
             state.markCompleted(&data.c);
             return;
         }
@@ -501,7 +501,7 @@ fn submitRecv(self: *Self, state: *LoopState, data: *NetRecv) !void {
         if (err != .WSA_IO_PENDING) {
             // Real error - complete immediately with error
             log.err("WSARecv failed: {}", .{err});
-            data.c.setError(error.Unexpected);
+            data.c.setError(net.errnoToRecvError(err));
             state.markCompleted(&data.c);
             return;
         }
@@ -538,7 +538,7 @@ fn submitSend(self: *Self, state: *LoopState, data: *NetSend) !void {
         if (err != .WSA_IO_PENDING) {
             // Real error - complete immediately with error
             log.err("WSASend failed: {}", .{err});
-            data.c.setError(error.Unexpected);
+            data.c.setError(net.errnoToSendError(err));
             state.markCompleted(&data.c);
             return;
         }
@@ -577,7 +577,7 @@ fn submitRecvFrom(self: *Self, state: *LoopState, data: *NetRecvFrom) !void {
         if (err != .WSA_IO_PENDING) {
             // Real error - complete immediately with error
             log.err("WSARecvFrom failed: {}", .{err});
-            data.c.setError(error.Unexpected);
+            data.c.setError(net.errnoToRecvError(err));
             state.markCompleted(&data.c);
             return;
         }
@@ -616,7 +616,7 @@ fn submitSendTo(self: *Self, state: *LoopState, data: *NetSendTo) !void {
         if (err != .WSA_IO_PENDING) {
             // Real error - complete immediately with error
             log.err("WSASendTo failed: {}", .{err});
-            data.c.setError(error.Unexpected);
+            data.c.setError(net.errnoToSendError(err));
             state.markCompleted(&data.c);
             return;
         }
@@ -679,7 +679,7 @@ fn submitConnect(self: *Self, state: *LoopState, data: *NetConnect) !void {
         if (err != .WSA_IO_PENDING) {
             // Real error - complete immediately with error
             log.err("ConnectEx failed: {}", .{err});
-            data.c.setError(error.Unexpected);
+            data.c.setError(net.errnoToConnectError(err));
             state.markCompleted(&data.c);
             return;
         }
