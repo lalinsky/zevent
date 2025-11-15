@@ -356,62 +356,16 @@ pub const Loop = struct {
                     std.debug.assert(work.c.state == .completed or work.c.state == .dead);
                 }
             },
-            .file_open => {
-                if (!Backend.capabilities.file_open) {
-                    self.cancelFileOpViaThreadPool(completion, &completion.cast(FileOpen).internal.work);
+
+            inline .file_open, .file_create, .file_close, .file_read, .file_write, .file_sync, .file_rename, .file_delete => |op| {
+                if (!@field(Backend.capabilities, @tagName(op))) {
+                    const op_data = completion.cast(op.toType());
+                    self.cancelFileOpViaThreadPool(completion, &op_data.internal.work);
                 } else {
                     self.backend.cancel(&self.state, completion);
                 }
             },
-            .file_create => {
-                if (!Backend.capabilities.file_create) {
-                    self.cancelFileOpViaThreadPool(completion, &completion.cast(FileCreate).internal.work);
-                } else {
-                    self.backend.cancel(&self.state, completion);
-                }
-            },
-            .file_close => {
-                if (!Backend.capabilities.file_close) {
-                    self.cancelFileOpViaThreadPool(completion, &completion.cast(FileClose).internal.work);
-                } else {
-                    self.backend.cancel(&self.state, completion);
-                }
-            },
-            .file_read => {
-                if (!Backend.capabilities.file_read) {
-                    self.cancelFileOpViaThreadPool(completion, &completion.cast(FileRead).internal.work);
-                } else {
-                    self.backend.cancel(&self.state, completion);
-                }
-            },
-            .file_write => {
-                if (!Backend.capabilities.file_write) {
-                    self.cancelFileOpViaThreadPool(completion, &completion.cast(FileWrite).internal.work);
-                } else {
-                    self.backend.cancel(&self.state, completion);
-                }
-            },
-            .file_sync => {
-                if (!Backend.capabilities.file_sync) {
-                    self.cancelFileOpViaThreadPool(completion, &completion.cast(FileSync).internal.work);
-                } else {
-                    self.backend.cancel(&self.state, completion);
-                }
-            },
-            .file_rename => {
-                if (!Backend.capabilities.file_rename) {
-                    self.cancelFileOpViaThreadPool(completion, &completion.cast(FileRename).internal.work);
-                } else {
-                    self.backend.cancel(&self.state, completion);
-                }
-            },
-            .file_delete => {
-                if (!Backend.capabilities.file_delete) {
-                    self.cancelFileOpViaThreadPool(completion, &completion.cast(FileDelete).internal.work);
-                } else {
-                    self.backend.cancel(&self.state, completion);
-                }
-            },
+
             else => {
                 // Backend operations (net_*, etc)
                 self.backend.cancel(&self.state, completion);
@@ -523,37 +477,11 @@ pub const Loop = struct {
                 // Regular backend operation
                 // Route file operations to thread pool for backends without native support
                 switch (completion.op) {
-                    .file_open => if (!Backend.capabilities.file_open) {
-                        self.submitFileOpToThreadPool(completion);
-                        return;
-                    },
-                    .file_create => if (!Backend.capabilities.file_create) {
-                        self.submitFileOpToThreadPool(completion);
-                        return;
-                    },
-                    .file_close => if (!Backend.capabilities.file_close) {
-                        self.submitFileOpToThreadPool(completion);
-                        return;
-                    },
-                    .file_read => if (!Backend.capabilities.file_read) {
-                        self.submitFileOpToThreadPool(completion);
-                        return;
-                    },
-                    .file_write => if (!Backend.capabilities.file_write) {
-                        self.submitFileOpToThreadPool(completion);
-                        return;
-                    },
-                    .file_sync => if (!Backend.capabilities.file_sync) {
-                        self.submitFileOpToThreadPool(completion);
-                        return;
-                    },
-                    .file_rename => if (!Backend.capabilities.file_rename) {
-                        self.submitFileOpToThreadPool(completion);
-                        return;
-                    },
-                    .file_delete => if (!Backend.capabilities.file_delete) {
-                        self.submitFileOpToThreadPool(completion);
-                        return;
+                    inline .file_open, .file_create, .file_close, .file_read, .file_write, .file_sync, .file_rename, .file_delete => |op| {
+                        if (!@field(Backend.capabilities, @tagName(op))) {
+                            self.submitFileOpToThreadPool(completion);
+                            return;
+                        }
                     },
                     else => {},
                 }
@@ -631,66 +559,25 @@ pub const Loop = struct {
         self.state.active += 1;
 
         switch (completion.op) {
-            .file_open => if (!Backend.capabilities.file_open) {
-                const file_open = completion.cast(FileOpen);
-                file_open.internal.allocator = self.allocator;
-                file_open.internal.work = Work.init(common.fileOpenWork, null);
-                file_open.internal.work.loop = self;
-                file_open.internal.work.linked = completion;
-                tp.submit(&file_open.internal.work);
-            } else unreachable,
-            .file_create => if (!Backend.capabilities.file_create) {
-                const file_create = completion.cast(FileCreate);
-                file_create.internal.allocator = self.allocator;
-                file_create.internal.work = Work.init(common.fileCreateWork, null);
-                file_create.internal.work.loop = self;
-                file_create.internal.work.linked = completion;
-                tp.submit(&file_create.internal.work);
-            } else unreachable,
-            .file_close => if (!Backend.capabilities.file_close) {
-                const file_close = completion.cast(FileClose);
-                file_close.internal.work = Work.init(common.fileCloseWork, null);
-                file_close.internal.work.loop = self;
-                file_close.internal.work.linked = completion;
-                tp.submit(&file_close.internal.work);
-            } else unreachable,
-            .file_read => if (!Backend.capabilities.file_read) {
-                const file_read = completion.cast(FileRead);
-                file_read.internal.work = Work.init(common.fileReadWork, null);
-                file_read.internal.work.loop = self;
-                file_read.internal.work.linked = completion;
-                tp.submit(&file_read.internal.work);
-            } else unreachable,
-            .file_write => if (!Backend.capabilities.file_write) {
-                const file_write = completion.cast(FileWrite);
-                file_write.internal.work = Work.init(common.fileWriteWork, null);
-                file_write.internal.work.loop = self;
-                file_write.internal.work.linked = completion;
-                tp.submit(&file_write.internal.work);
-            } else unreachable,
-            .file_sync => if (!Backend.capabilities.file_sync) {
-                const file_sync = completion.cast(FileSync);
-                file_sync.internal.work = Work.init(common.fileSyncWork, null);
-                file_sync.internal.work.loop = self;
-                file_sync.internal.work.linked = completion;
-                tp.submit(&file_sync.internal.work);
-            } else unreachable,
-            .file_rename => if (!Backend.capabilities.file_rename) {
-                const file_rename = completion.cast(FileRename);
-                file_rename.internal.allocator = self.allocator;
-                file_rename.internal.work = Work.init(common.fileRenameWork, null);
-                file_rename.internal.work.loop = self;
-                file_rename.internal.work.linked = completion;
-                tp.submit(&file_rename.internal.work);
-            } else unreachable,
-            .file_delete => if (!Backend.capabilities.file_delete) {
-                const file_delete = completion.cast(FileDelete);
-                file_delete.internal.allocator = self.allocator;
-                file_delete.internal.work = Work.init(common.fileDeleteWork, null);
-                file_delete.internal.work.loop = self;
-                file_delete.internal.work.linked = completion;
-                tp.submit(&file_delete.internal.work);
-            } else unreachable,
+            inline .file_open, .file_create, .file_close, .file_read, .file_write, .file_sync, .file_rename, .file_delete => |op| {
+                const op_func = switch (op) {
+                    .file_open => common.fileOpenWork,
+                    .file_create => common.fileCreateWork,
+                    .file_close => common.fileCloseWork,
+                    .file_read => common.fileReadWork,
+                    .file_write => common.fileWriteWork,
+                    .file_sync => common.fileSyncWork,
+                    .file_rename => common.fileRenameWork,
+                    .file_delete => common.fileDeleteWork,
+                    else => unreachable,
+                };
+                const op_data = completion.cast(op.toType());
+                op_data.internal.allocator = self.allocator;
+                op_data.internal.work = Work.init(op_func, null);
+                op_data.internal.work.loop = self;
+                op_data.internal.work.linked = completion;
+                tp.submit(&op_data.internal.work);
+            },
             else => unreachable,
         }
     }
