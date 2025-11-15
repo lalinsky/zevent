@@ -577,7 +577,7 @@ pub const Loop = struct {
                 };
 
                 const op_data = completion.cast(op.toType());
-                if (@hasField(@TypeOf(op_data.internal), "allocation")) {
+                if (@hasField(@TypeOf(op_data.internal), "allocator")) {
                     op_data.internal.allocator = self.allocator;
                 }
                 op_data.internal.work = Work.init(op_func, null);
