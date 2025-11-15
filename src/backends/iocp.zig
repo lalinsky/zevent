@@ -400,6 +400,19 @@ pub fn submit(self: *Self, state: *LoopState, c: *Completion) void {
     }
 }
 
+fn recvFlagsToMsg(flags: net.RecvFlags) windows.DWORD {
+    var msg_flags: windows.DWORD = 0;
+    if (flags.peek) msg_flags |= windows.ws2_32.MSG.PEEK;
+    if (flags.waitall) msg_flags |= windows.ws2_32.MSG.WAITALL;
+    return msg_flags;
+}
+
+fn sendFlagsToMsg(flags: net.SendFlags) windows.DWORD {
+    // Windows doesn't have MSG_NOSIGNAL (no signals on Windows)
+    _ = flags;
+    return 0;
+}
+
 fn submitAccept(self: *Self, state: *LoopState, data: *NetAccept) !void {
     // Get socket address to determine address family
     var addr_buf align(@alignOf(windows.ws2_32.sockaddr.in6)) = [_]u8{0} ** 128;
@@ -481,7 +494,7 @@ fn submitRecv(self: *Self, state: *LoopState, data: *NetRecv) !void {
     const wsabufs = data.buffers.iovecs;
 
     var bytes_received: windows.DWORD = 0;
-    var flags: windows.DWORD = 0; // TODO: map data.flags to Windows flags
+    var flags: windows.DWORD = recvFlagsToMsg(data.flags);
 
     const result = windows.ws2_32.WSARecv(
         data.handle,
@@ -519,7 +532,7 @@ fn submitSend(self: *Self, state: *LoopState, data: *NetSend) !void {
     const wsabufs = data.buffer.iovecs;
 
     var bytes_sent: windows.DWORD = 0;
-    const flags: windows.DWORD = 0; // TODO: map data.flags to Windows flags
+    const flags: windows.DWORD = sendFlagsToMsg(data.flags);
 
     const result = windows.ws2_32.WSASend(
         data.handle,
@@ -556,7 +569,7 @@ fn submitRecvFrom(self: *Self, state: *LoopState, data: *NetRecvFrom) !void {
     const wsabufs = data.buffer.iovecs;
 
     var bytes_received: windows.DWORD = 0;
-    var flags: windows.DWORD = 0;
+    var flags: windows.DWORD = recvFlagsToMsg(data.flags);
 
     const result = windows.ws2_32.WSARecvFrom(
         data.handle,
@@ -595,7 +608,7 @@ fn submitSendTo(self: *Self, state: *LoopState, data: *NetSendTo) !void {
     const wsabufs = data.buffer.iovecs;
 
     var bytes_sent: windows.DWORD = 0;
-    const flags: windows.DWORD = 0;
+    const flags: windows.DWORD = sendFlagsToMsg(data.flags);
 
     const result = windows.ws2_32.WSASendTo(
         data.handle,
